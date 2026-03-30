@@ -1,0 +1,41 @@
+[email]
+# SMTP server address (default: localhost for a local MTA like Postfix)
+smtp_host = localhost
+smtp_port = 25
+from_addr = watchdog@localhost
+to_addr   = admin@example.com
+# Set to "true" to use SMTP_SSL (port 465) or STARTTLS (port 587)
+use_tls   = false
+# Leave empty if no SMTP authentication is required
+username  =
+password  =
+# Prefix prepended to every email subject
+subject_prefix = [server-watchdog]
+
+[llm]
+# LLM provider for AVC denial analysis.  Currently supported: "gemini"
+provider  = gemini
+# Your Google Gemini API key (https://aistudio.google.com/app/apikey)
+api_key   = YOUR_GEMINI_API_KEY_HERE
+# Model name – see https://ai.google.dev/models/gemini for available models
+model     = gemini-1.5-pro
+
+[maintenance]
+# Monthly check flags (true/false)
+check_packages  = true
+check_services  = true
+check_storage   = true
+# Warn when a filesystem exceeds this percentage of usage
+storage_threshold = 80
+# How many days of journal history to scan for error/critical messages
+log_lookback_days = 30
+
+[avc_monitor]
+# Seconds to wait after the first AVC denial before flushing the batch.
+# Denials that arrive within this window are grouped into a single email.
+batch_interval = 60
+
+[logging]
+log_file = /var/log/server-watchdog/watchdog.log
+# DEBUG, INFO, WARNING, ERROR, or CRITICAL
+level    = INFO

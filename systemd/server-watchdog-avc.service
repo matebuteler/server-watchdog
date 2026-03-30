@@ -1,0 +1,26 @@
+[Unit]
+Description=server-watchdog AVC Denial Monitor
+Documentation=https://github.com/matebuteler/server-watchdog
+After=auditd.service systemd-journald.service network.target
+Wants=auditd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/server-watchdog-avc-monitor
+Restart=on-failure
+RestartSec=10s
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=server-watchdog-avc
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/var/log/server-watchdog
+
+[Install]
+WantedBy=multi-user.target
