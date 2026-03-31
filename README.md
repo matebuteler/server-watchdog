@@ -31,10 +31,12 @@ sudo bash install.sh
 ```
 
 The script will:
-1. Install Python dependencies (`google-genai`).
-2. Install the package via `pip`.
-3. Create `/etc/server-watchdog/config.ini` from the example file.
-4. Install and enable the systemd units.
+1. Create a Python virtual environment in `/opt/server-watchdog/venv`.
+2. Install Python dependencies (`google-genai`) into the venv.
+3. Install the package into the venv via `pip`.
+4. Symlink the entry-point scripts from the venv into `/usr/local/bin/`.
+5. Create `/etc/server-watchdog/config.ini` from the example file.
+6. Install and enable the systemd units.
 
 After installation, **edit `/etc/server-watchdog/config.ini`** and fill in your
 email settings and Gemini API key.
@@ -119,6 +121,8 @@ systemctl start server-watchdog-monthly.service
 ## Development
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 pytest
 ```

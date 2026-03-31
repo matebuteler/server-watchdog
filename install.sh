@@ -5,6 +5,7 @@
 set -euo pipefail
 
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local}"
+VENV_DIR="/opt/server-watchdog/venv"
 CONFIG_DIR="/etc/server-watchdog"
 LOG_DIR="/var/log/server-watchdog"
 SYSTEMD_DIR="/etc/systemd/system"
@@ -21,13 +22,22 @@ command -v python3 &>/dev/null || error "python3 is required but not found."
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
     || error "Python 3.10 or later is required (found $(python3 --version)). Install python3.10 or newer and re-run."
 
+# ── Python virtual environment ────────────────────────────────────────────────
+info "Creating Python virtual environment in ${VENV_DIR}..."
+python3 -m venv "$VENV_DIR"
+
 # ── Python dependencies ───────────────────────────────────────────────────────
 info "Installing Python dependencies..."
-python3 -m pip install --quiet -r "$(dirname "$0")/requirements.txt"
+"$VENV_DIR/bin/pip" install --quiet -r "$(dirname "$0")/requirements.txt"
 
 # ── Install the Python package ────────────────────────────────────────────────
 info "Installing server-watchdog package..."
-python3 -m pip install --quiet "$(dirname "$0")"
+"$VENV_DIR/bin/pip" install --quiet "$(dirname "$0")"
+
+# ── Link entry-point scripts into PATH ────────────────────────────────────────
+info "Linking entry-point scripts to ${INSTALL_PREFIX}/bin/..."
+ln -sf "$VENV_DIR/bin/server-watchdog-avc-monitor" "$INSTALL_PREFIX/bin/server-watchdog-avc-monitor"
+ln -sf "$VENV_DIR/bin/server-watchdog-monthly"     "$INSTALL_PREFIX/bin/server-watchdog-monthly"
 
 # ── Create directories ────────────────────────────────────────────────────────
 info "Creating directories..."
