@@ -21,7 +21,7 @@ from datetime import datetime
 
 from .email_sender import send_email
 from .llm import analyse_avc_denials
-from .utils import escape_html, get_hostname
+from .utils import escape_html, get_hostname, markdown_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -264,31 +264,5 @@ def _build_alert_html(hostname, now, count, raw_block, analysis):
 
 
 def _markdown_to_html(text):
-    """Very minimal Markdown-to-HTML conversion for LLM output."""
-    import re  # pylint: disable=import-outside-toplevel
-
-    html_lines = []
-    for line in text.splitlines():
-        # Headers
-        if line.startswith("### "):
-            html_lines.append(f"<h4>{escape_html(line[4:])}</h4>")
-        elif line.startswith("## "):
-            html_lines.append(f"<h3>{escape_html(line[3:])}</h3>")
-        elif line.startswith("# "):
-            html_lines.append(f"<h2>{escape_html(line[2:])}</h2>")
-        # Horizontal rule
-        elif re.match(r"^-{3,}$", line):
-            html_lines.append("<hr>")
-        # Bullet points
-        elif line.startswith("- ") or line.startswith("* "):
-            html_lines.append(f"<li>{escape_html(line[2:])}</li>")
-        # Blank line → paragraph break
-        elif not line.strip():
-            html_lines.append("<br>")
-        else:
-            # Bold (**text**)
-            escaped = escape_html(line)
-            escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
-            html_lines.append(f"<p>{escaped}</p>")
-
-    return "\n".join(html_lines)
+    """Backward-compatible alias for :func:`server_watchdog.utils.markdown_to_html`."""
+    return markdown_to_html(text)

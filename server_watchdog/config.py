@@ -45,6 +45,7 @@ class Config:
                 "check_storage": "true",
                 "storage_threshold": "80",
                 "log_lookback_days": "30",
+                "coredump_age_days": "45",
             },
             "avc_monitor": {
                 "batch_interval": "60",
@@ -53,6 +54,10 @@ class Config:
             "logging": {
                 "log_file": "/var/log/server-watchdog/watchdog.log",
                 "level": "INFO",
+            },
+            "server": {
+                "context": "Linux server",
+                "uid_map": "",
             },
         }
         for section, options in defaults.items():

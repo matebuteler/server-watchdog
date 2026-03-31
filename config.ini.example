@@ -33,6 +33,8 @@ check_storage   = true
 storage_threshold = 80
 # How many days of journal history to scan for error/critical messages
 log_lookback_days = 30
+# Coredumps older than this many days are excluded from the report
+coredump_age_days = 45
 
 [avc_monitor]
 # Seconds to wait after the first AVC denial before flushing the batch.
@@ -46,3 +48,13 @@ avc_lookback_days = 7
 log_file = /var/log/server-watchdog/watchdog.log
 # DEBUG, INFO, WARNING, ERROR, or CRITICAL
 level    = INFO
+
+[server]
+# Free-text description of this server's role and environment.
+# The LLM uses this to tailor recommendations (e.g. skip Bluetooth warnings
+# on a headless workstation, or flag EDA-tool crashes as high-severity).
+context = EDA workstation on a private network. Accessed via VNC. \
+No audio, Bluetooth, or consumer peripherals.
+# Optional extra UID→username mappings (comma-separated uid:name pairs).
+# When empty, /etc/passwd is used automatically.
+uid_map =

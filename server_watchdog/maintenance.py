@@ -2,9 +2,9 @@
 
 import logging
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from .utils import escape_html, get_hostname
+from .utils import escape_html, get_hostname, get_uid_map, markdown_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +66,43 @@ def check_failed_services():
         return {"failed": [], "error": "systemctl timed out"}
 
 
+def get_service_logs(unit_name, lines=50):
+    """Return recent journal log lines for a systemd service unit.
+
+    Parameters
+    ----------
+    unit_name:
+        The systemd unit name (e.g. ``"myapp.service"``).
+    lines:
+        Maximum number of log lines to return.
+
+    Returns
+    -------
+    str
+        Log output, or an error string if journalctl is unavailable.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "journalctl", "-u", unit_name,
+                "--no-pager", f"-n{lines}", "--output=short-iso",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result.stdout.strip()
+    except FileNotFoundError:
+        return "(journalctl not found)"
+    except subprocess.TimeoutExpired:
+        return "(journalctl timed out)"
+
+
 def check_storage(threshold=80):
     """Return a dict with filesystems at or above *threshold* percent used.
+
+    NFS filesystems (fstype ``nfs`` / ``nfs4``) are reported in a separate
+    list (``nfs_filesystems``) so callers can treat them as lower priority.
 
     Parameters
     ----------
@@ -77,7 +112,8 @@ def check_storage(threshold=80):
     Returns
     -------
     dict
-        ``{'filesystems': [...], 'threshold': int, 'error': None|str}``
+        ``{'filesystems': [...], 'nfs_filesystems': [...],
+        'all_output': str, 'threshold': int, 'error': None|str}``
     """
     try:
         result = subprocess.run(
@@ -88,31 +124,42 @@ def check_storage(threshold=80):
             timeout=30,
         )
         lines = result.stdout.splitlines()
-        header = lines[0] if lines else ""
         concerning = []
+        nfs_concerning = []
         for line in lines[1:]:
             parts = line.split()
             if not parts:
                 continue
+            fstype = parts[1] if len(parts) >= 2 else ""
             pct_str = parts[5] if len(parts) >= 6 else ""
             try:
                 pct = int(pct_str.rstrip("%"))
             except ValueError:
                 continue
             if pct >= threshold:
-                concerning.append(line.strip())
+                if fstype.lower().startswith("nfs"):
+                    nfs_concerning.append(line.strip())
+                else:
+                    concerning.append(line.strip())
         return {
             "filesystems": concerning,
+            "nfs_filesystems": nfs_concerning,
             "all_output": result.stdout.strip(),
             "threshold": threshold,
             "error": None,
         }
     except FileNotFoundError:
-        return {"filesystems": [], "all_output": "", "threshold": threshold,
-                "error": "df not found"}
+        return {
+            "filesystems": [], "nfs_filesystems": [],
+            "all_output": "", "threshold": threshold,
+            "error": "df not found",
+        }
     except subprocess.TimeoutExpired:
-        return {"filesystems": [], "all_output": "", "threshold": threshold,
-                "error": "df timed out"}
+        return {
+            "filesystems": [], "nfs_filesystems": [],
+            "all_output": "", "threshold": threshold,
+            "error": "df timed out",
+        }
 
 
 def check_journal_errors(lookback_days=30):
@@ -151,12 +198,85 @@ def check_journal_errors(lookback_days=30):
         return {"errors": [], "error": "journalctl timed out"}
 
 
+def check_coredumps(max_age_days=45):
+    """Return a dict with coredumps from the last *max_age_days* days.
+
+    Uses ``coredumpctl list --no-pager --no-legend`` and filters entries older
+    than *max_age_days*.  Entries whose timestamp cannot be parsed are included
+    conservatively.
+
+    Parameters
+    ----------
+    max_age_days:
+        Coredumps older than this many days are excluded.
+
+    Returns
+    -------
+    dict
+        ``{'dumps': [...], 'error': None|str}``
+    """
+    cutoff = datetime.now() - timedelta(days=max_age_days)
+    try:
+        result = subprocess.run(
+            ["coredumpctl", "list", "--no-pager", "--no-legend"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        # Exit code 1 just means no coredumps found on some distros
+        if result.returncode not in (0, 1):
+            return {
+                "dumps": [],
+                "error": result.stderr.strip() or "coredumpctl failed",
+            }
+
+        dumps = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            # coredumpctl output: "DayName YYYY-MM-DD HH:MM:SS TZ PID UID ..."
+            if len(parts) < 5:
+                dumps.append(line)  # include unparseable lines conservatively
+                continue
+            try:
+                ts = datetime.strptime(f"{parts[1]} {parts[2]}", "%Y-%m-%d %H:%M:%S")
+                if ts < cutoff:
+                    continue
+            except (ValueError, IndexError):
+                pass  # include if date cannot be parsed
+            dumps.append(line)
+
+        return {"dumps": dumps, "error": None}
+    except FileNotFoundError:
+        return {"dumps": [], "error": "coredumpctl not found"}
+    except subprocess.TimeoutExpired:
+        return {"dumps": [], "error": "coredumpctl timed out"}
+
+
 # ---------------------------------------------------------------------------
 # Report building
 # ---------------------------------------------------------------------------
 
+def _extract_unit_name(svc_line):
+    """Extract the systemd unit name from a ``systemctl list-units`` output line.
+
+    Handles lines with and without a leading ``●`` / ``✗`` symbol.
+    """
+    for word in svc_line.split():
+        if word not in ("●", "✗", "×", "○"):
+            return word
+    return ""
+
+
 def build_report(config):
     """Run all enabled maintenance checks and return (text, html) reports.
+
+    When an LLM API key is configured the raw data is passed to
+    :func:`server_watchdog.llm.analyse_maintenance_report` and the LLM output
+    is used as the report body.  If the LLM is unavailable or the key is not
+    set, a static plain-text/HTML report is generated instead.
 
     Parameters
     ----------
@@ -172,6 +292,70 @@ def build_report(config):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     threshold = config.getint("maintenance", "storage_threshold", fallback=80)
     lookback = config.getint("maintenance", "log_lookback_days", fallback=30)
+    coredump_age = config.getint("maintenance", "coredump_age_days", fallback=45)
+
+    # ── Collect raw data ──────────────────────────────────────────────────
+    pkg_data = None
+    svc_data = None
+    sto_data = None
+
+    if config.getboolean("maintenance", "check_packages", fallback=True):
+        pkg_data = check_packages()
+
+    if config.getboolean("maintenance", "check_services", fallback=True):
+        svc_data = check_failed_services()
+        svc_data["logs"] = {}
+        for svc_line in svc_data.get("failed", []):
+            unit = _extract_unit_name(svc_line)
+            if unit:
+                svc_data["logs"][unit] = get_service_logs(unit)
+
+    if config.getboolean("maintenance", "check_storage", fallback=True):
+        sto_data = check_storage(threshold=threshold)
+
+    jnl_data = check_journal_errors(lookback_days=lookback)
+    core_data = check_coredumps(max_age_days=coredump_age)
+
+    raw = {
+        "hostname": hostname,
+        "timestamp": now,
+        "server_context": config.get("server", "context", fallback="Linux server"),
+        "uid_map": get_uid_map(),
+        "packages": pkg_data,
+        "services": svc_data,
+        "storage": sto_data,
+        "journal_errors": jnl_data,
+        "coredumps": core_data,
+        "threshold": threshold,
+        "lookback": lookback,
+        "coredump_age": coredump_age,
+    }
+
+    # ── LLM analysis (optional) ───────────────────────────────────────────
+    from .llm import analyse_maintenance_report  # pylint: disable=import-outside-toplevel
+    api_key = config.get("llm", "api_key", fallback="")
+    if api_key:
+        llm_text = analyse_maintenance_report(config, raw)
+        if llm_text and not llm_text.startswith("(LLM"):
+            html_body = (
+                f"<h1>Server Maintenance Report</h1>"
+                f"<p><b>Host:</b> {escape_html(hostname)}&nbsp;|&nbsp;"
+                f"<b>Date:</b> {escape_html(now)}</p>"
+                f"<div class='llm-report'>{markdown_to_html(llm_text)}</div>"
+            )
+            return llm_text, _wrap_html(html_body)
+
+    # ── Static fallback ───────────────────────────────────────────────────
+    return _build_static_report(raw)
+
+
+def _build_static_report(raw):
+    """Build a static plain-text / HTML report from *raw* data (no LLM)."""
+    hostname = raw["hostname"]
+    now = raw["timestamp"]
+    threshold = raw["threshold"]
+    lookback = raw["lookback"]
+    coredump_age = raw["coredump_age"]
 
     sections_text = []
     sections_html = []
@@ -183,14 +367,14 @@ def build_report(config):
     )
 
     # --- Packages ---
-    if config.getboolean("maintenance", "check_packages", fallback=True):
-        data = check_packages()
-        if data["error"]:
-            t = f"[PACKAGES]\nError: {data['error']}\n"
-            h = f"<h2>Package Updates</h2><p class='error'>Error: {data['error']}</p>"
-        elif data["updates"]:
-            count = len(data["updates"])
-            listing = "\n".join(data["updates"])
+    pkg = raw.get("packages")
+    if pkg is not None:
+        if pkg["error"]:
+            t = f"[PACKAGES]\nError: {pkg['error']}\n"
+            h = f"<h2>Package Updates</h2><p class='error'>Error: {pkg['error']}</p>"
+        elif pkg["updates"]:
+            count = len(pkg["updates"])
+            listing = "\n".join(pkg["updates"])
             t = f"[PACKAGES]\n{count} update(s) available:\n{listing}\n"
             h = (
                 f"<h2>Package Updates</h2>"
@@ -204,17 +388,17 @@ def build_report(config):
         sections_html.append(h)
 
     # --- Failed services ---
-    if config.getboolean("maintenance", "check_services", fallback=True):
-        data = check_failed_services()
-        if data["error"]:
-            t = f"[SERVICES]\nError: {data['error']}\n"
-            h = f"<h2>Failed Services</h2><p class='error'>Error: {data['error']}</p>"
-        elif data["failed"]:
-            listing = "\n".join(data["failed"])
-            t = f"[SERVICES]\n{len(data['failed'])} failed unit(s):\n{listing}\n"
+    svc = raw.get("services")
+    if svc is not None:
+        if svc["error"]:
+            t = f"[SERVICES]\nError: {svc['error']}\n"
+            h = f"<h2>Failed Services</h2><p class='error'>Error: {svc['error']}</p>"
+        elif svc["failed"]:
+            listing = "\n".join(svc["failed"])
+            t = f"[SERVICES]\n{len(svc['failed'])} failed unit(s):\n{listing}\n"
             h = (
                 f"<h2>Failed Services</h2>"
-                f"<p>⚠️ {len(data['failed'])} failed unit(s):</p>"
+                f"<p>⚠️ {len(svc['failed'])} failed unit(s):</p>"
                 f"<pre>{escape_html(listing)}</pre>"
             )
         else:
@@ -224,49 +408,76 @@ def build_report(config):
         sections_html.append(h)
 
     # --- Storage ---
-    if config.getboolean("maintenance", "check_storage", fallback=True):
-        data = check_storage(threshold=threshold)
-        if data["error"]:
-            t = f"[STORAGE]\nError: {data['error']}\n"
-            h = f"<h2>Storage Usage</h2><p class='error'>Error: {data['error']}</p>"
-        elif data["filesystems"]:
-            listing = "\n".join(data["filesystems"])
-            t = (
-                f"[STORAGE]\n{len(data['filesystems'])} filesystem(s) above {threshold}%:\n"
-                f"{listing}\n\nFull disk usage:\n{data['all_output']}\n"
-            )
-            h = (
-                f"<h2>Storage Usage</h2>"
-                f"<p>⚠️ {len(data['filesystems'])} filesystem(s) above {threshold}%:</p>"
-                f"<pre>{escape_html(listing)}</pre>"
-                f"<details><summary>Full disk usage</summary>"
-                f"<pre>{escape_html(data['all_output'])}</pre></details>"
-            )
+    sto = raw.get("storage")
+    if sto is not None:
+        if sto["error"]:
+            t = f"[STORAGE]\nError: {sto['error']}\n"
+            h = f"<h2>Storage Usage</h2><p class='error'>Error: {sto['error']}</p>"
         else:
-            t = f"[STORAGE]\nAll filesystems below {threshold}% usage.\n\n{data['all_output']}\n"
-            h = (
-                f"<h2>Storage Usage</h2>"
-                f"<p>✅ All filesystems below {threshold}% usage.</p>"
-                f"<details><summary>Full disk usage</summary>"
-                f"<pre>{escape_html(data['all_output'])}</pre></details>"
-            )
+            local_fs = sto.get("filesystems", [])
+            nfs_fs = sto.get("nfs_filesystems", [])
+            all_out = sto.get("all_output", "")
+            all_concerning = local_fs + nfs_fs
+            if all_concerning:
+                listing = "\n".join(local_fs)
+                nfs_listing = "\n".join(nfs_fs)
+                t_parts = [
+                    f"[STORAGE]\n{len(all_concerning)} filesystem(s) above {threshold}%:"
+                ]
+                if local_fs:
+                    t_parts.append(listing)
+                if nfs_fs:
+                    t_parts.append(f"NFS mounts (lower priority):\n{nfs_listing}")
+                t_parts.append(f"\nFull disk usage:\n{all_out}")
+                t = "\n".join(t_parts) + "\n"
+
+                h_parts = [
+                    f"<h2>Storage Usage</h2>"
+                    f"<p>⚠️ {len(all_concerning)} filesystem(s) above {threshold}%:</p>"
+                ]
+                if local_fs:
+                    h_parts.append(f"<pre>{escape_html(listing)}</pre>")
+                if nfs_fs:
+                    h_parts.append(
+                        f"<p><em>NFS mounts (lower priority):</em></p>"
+                        f"<pre>{escape_html(nfs_listing)}</pre>"
+                    )
+                h_parts.append(
+                    f"<details><summary>Full disk usage</summary>"
+                    f"<pre>{escape_html(all_out)}</pre></details>"
+                )
+                h = "".join(h_parts)
+            else:
+                t = (
+                    f"[STORAGE]\nAll filesystems below {threshold}% usage.\n\n"
+                    f"{all_out}\n"
+                )
+                h = (
+                    f"<h2>Storage Usage</h2>"
+                    f"<p>✅ All filesystems below {threshold}% usage.</p>"
+                    f"<details><summary>Full disk usage</summary>"
+                    f"<pre>{escape_html(all_out)}</pre></details>"
+                )
         sections_text.append(t)
         sections_html.append(h)
 
     # --- Journal errors ---
-    data = check_journal_errors(lookback_days=lookback)
-    if data["error"]:
-        t = f"[JOURNAL ERRORS]\nError: {data['error']}\n"
-        h = f"<h2>Journal Errors (last {lookback} days)</h2><p class='error'>Error: {data['error']}</p>"
-    elif data["errors"]:
-        listing = "\n".join(data["errors"])
+    jnl = raw["journal_errors"]
+    if jnl["error"]:
+        t = f"[JOURNAL ERRORS]\nError: {jnl['error']}\n"
+        h = (
+            f"<h2>Journal Errors (last {lookback} days)</h2>"
+            f"<p class='error'>Error: {jnl['error']}</p>"
+        )
+    elif jnl["errors"]:
+        listing = "\n".join(jnl["errors"])
         t = (
             f"[JOURNAL ERRORS (last {lookback} days)]\n"
-            f"{len(data['errors'])} error/critical message(s):\n{listing}\n"
+            f"{len(jnl['errors'])} error/critical message(s):\n{listing}\n"
         )
         h = (
             f"<h2>Journal Errors (last {lookback} days)</h2>"
-            f"<p>⚠️ {len(data['errors'])} error/critical message(s):</p>"
+            f"<p>⚠️ {len(jnl['errors'])} error/critical message(s):</p>"
             f"<pre>{escape_html(listing)}</pre>"
         )
     else:
@@ -277,6 +488,27 @@ def build_report(config):
         )
     sections_text.append(t)
     sections_html.append(h)
+
+    # --- Coredumps ---
+    core = raw["coredumps"]
+    if core.get("error") and "not found" not in core["error"]:
+        t = f"[COREDUMPS]\nError: {core['error']}\n"
+        h = f"<h2>Coredumps</h2><p class='error'>Error: {core['error']}</p>"
+        sections_text.append(t)
+        sections_html.append(h)
+    elif core.get("dumps"):
+        listing = "\n".join(core["dumps"])
+        t = (
+            f"[COREDUMPS (last {coredump_age} days)]\n"
+            f"{len(core['dumps'])} coredump(s):\n{listing}\n"
+        )
+        h = (
+            f"<h2>Coredumps (last {coredump_age} days)</h2>"
+            f"<p>⚠️ {len(core['dumps'])} coredump(s) found:</p>"
+            f"<pre>{escape_html(listing)}</pre>"
+        )
+        sections_text.append(t)
+        sections_html.append(h)
 
     plain = "\n".join(sections_text)
     html = _wrap_html("\n".join(sections_html))
@@ -299,6 +531,7 @@ def _wrap_html(body):
   h2 {{ color: #555; border-bottom: 1px solid #ccc; padding-bottom: 4px; }}
   pre {{ background: #f4f4f4; padding: 1em; overflow-x: auto; white-space: pre-wrap; }}
   .error {{ color: red; }}
+  .llm-report {{ font-family: sans-serif; line-height: 1.6; }}
   details summary {{ cursor: pointer; color: #0066cc; }}
 </style>
 </head>
