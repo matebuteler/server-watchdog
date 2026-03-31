@@ -2,10 +2,14 @@
 # SMTP server address (default: localhost for a local MTA like Postfix)
 smtp_host = localhost
 smtp_port = 25
+# Sender address shown in the From: header (e.g. watchdog@mydomain.org)
 from_addr = watchdog@localhost
 to_addr   = admin@example.com
-# Set to "true" to use SMTP_SSL (port 465) or STARTTLS (port 587)
-use_tls   = false
+# Set use_tls = true to wrap the connection in SSL/TLS (port 465, SMTP_SSL).
+# Set use_starttls = true to upgrade a plain connection with STARTTLS (port 587).
+# Use use_starttls when relaying through Gmail or another provider on port 587.
+use_tls      = false
+use_starttls = false
 # Leave empty if no SMTP authentication is required
 username  =
 password  =

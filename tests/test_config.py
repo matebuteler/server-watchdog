@@ -25,6 +25,9 @@ class TestConfigDefaults:
     def test_email_use_tls_false(self):
         assert self.cfg.getboolean("email", "use_tls") is False
 
+    def test_email_use_starttls_false(self):
+        assert self.cfg.getboolean("email", "use_starttls") is False
+
     def test_llm_provider(self):
         assert self.cfg.get("llm", "provider") == "gemini"
 

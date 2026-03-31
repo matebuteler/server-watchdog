@@ -29,6 +29,7 @@ class Config:
                 "from_addr": "watchdog@localhost",
                 "to_addr": "root@localhost",
                 "use_tls": "false",
+                "use_starttls": "false",
                 "username": "",
                 "password": "",
                 "subject_prefix": "[server-watchdog]",

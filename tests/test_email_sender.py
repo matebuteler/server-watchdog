@@ -80,11 +80,30 @@ class TestSendEmail:
 
         mock_smtp.login.assert_called_once_with("user", "pass")
 
-    def test_no_login_when_no_credentials(self):
+    def test_starttls_called_when_use_starttls_true(self):
+        cfg = _make_config(**{"email.use_starttls": "true"})
+        mock_smtp = MagicMock()
+
+        with patch("smtplib.SMTP", return_value=mock_smtp):
+            send_email(cfg, "s", "b")
+
+        mock_smtp.starttls.assert_called_once()
+
+    def test_starttls_not_called_by_default(self):
         cfg = _make_config()
         mock_smtp = MagicMock()
 
         with patch("smtplib.SMTP", return_value=mock_smtp):
             send_email(cfg, "s", "b")
 
-        mock_smtp.login.assert_not_called()
+        mock_smtp.starttls.assert_not_called()
+
+    def test_starttls_not_called_when_use_tls_true(self):
+        """SMTP_SSL path: starttls() must not be called (it's already encrypted)."""
+        cfg = _make_config(**{"email.use_tls": "true"})
+        mock_smtp = MagicMock()
+
+        with patch("smtplib.SMTP_SSL", return_value=mock_smtp):
+            send_email(cfg, "s", "b")
+
+        mock_smtp.starttls.assert_not_called()

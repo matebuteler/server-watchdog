@@ -43,6 +43,7 @@ def send_email(config, subject, body_text, body_html=None):
     smtp_host = config.get("email", "smtp_host")
     smtp_port = config.getint("email", "smtp_port")
     use_tls = config.getboolean("email", "use_tls")
+    use_starttls = config.getboolean("email", "use_starttls")
     username = config.get("email", "username")
     password = config.get("email", "password")
 
@@ -51,6 +52,8 @@ def send_email(config, subject, body_text, body_html=None):
             smtp = smtplib.SMTP_SSL(smtp_host, smtp_port)
         else:
             smtp = smtplib.SMTP(smtp_host, smtp_port)
+            if use_starttls:
+                smtp.starttls()
 
         if username:
             smtp.login(username, password)

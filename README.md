@@ -63,6 +63,36 @@ batch_interval = 60      # seconds to collect denials before sending alert
 
 The full list of options with documentation is in `config.ini.example`.
 
+### Sender address
+
+Set `from_addr` in the `[email]` section to the address that should appear in
+the **From:** header of every email (e.g. `watchdog@mydomain.org`):
+
+```ini
+[email]
+from_addr = watchdog@mydomain.org
+```
+
+### Using a Gmail SMTP relay (port 587 / STARTTLS)
+
+If you have configured Postfix to relay through `smtp-relay.gmail.com` and want
+server-watchdog to send directly (bypassing the local MTA), set:
+
+```ini
+[email]
+smtp_host    = smtp-relay.gmail.com
+smtp_port    = 587
+from_addr    = sender@mydomain.org
+to_addr      = admin@mydomain.org
+use_starttls = true
+```
+
+> **Tip:** When routing through a local Postfix relay (i.e. `relayhost` is set
+> in `/etc/postfix/main.cf`), you can keep `smtp_host = localhost` and
+> `smtp_port = 25` – Postfix will forward the message through the relay
+> automatically.  Only set `use_starttls = true` when connecting *directly* to
+> an external SMTP server on port 587.
+
 ---
 
 ## Systemd services
