@@ -67,11 +67,24 @@ class Config:
 
     def _load(self):
         if os.path.exists(self._config_path):
-            self._parser.read(self._config_path)
+            successfully_read = self._parser.read(self._config_path)
+            self._config_file_found = bool(successfully_read)
+        else:
+            self._config_file_found = False
 
     # ------------------------------------------------------------------
     # Public accessors
     # ------------------------------------------------------------------
+
+    @property
+    def config_path(self):
+        """The filesystem path that was (or would be) read for configuration."""
+        return self._config_path
+
+    @property
+    def config_file_found(self):
+        """``True`` if the config file was found and read; ``False`` otherwise."""
+        return self._config_file_found
 
     def get(self, section, key, fallback=None):
         return self._parser.get(section, key, fallback=fallback)

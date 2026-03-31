@@ -335,8 +335,17 @@ def build_report(config):
     from .llm import analyse_maintenance_report  # pylint: disable=import-outside-toplevel
     api_key = config.get("llm", "api_key", fallback="")
     if api_key:
+        provider = config.get("llm", "provider", fallback="gemini")
+        model = config.get("llm", "model", fallback="gemini-1.5-pro")
+        print(
+            f"  LLM maintenance analysis: provider={provider}, model={model}, "
+            f"key=<configured>",
+            flush=True,
+        )
+        print("  Requesting LLM maintenance analysis…", flush=True)
         llm_text = analyse_maintenance_report(config, raw)
         if llm_text and not llm_text.startswith("(LLM"):
+            print("  ✓ LLM maintenance analysis complete.", flush=True)
             html_body = (
                 f"<h1>Server Maintenance Report</h1>"
                 f"<p><b>Host:</b> {escape_html(hostname)}&nbsp;|&nbsp;"
@@ -344,6 +353,16 @@ def build_report(config):
                 f"<div class='llm-report'>{markdown_to_html(llm_text)}</div>"
             )
             return llm_text, _wrap_html(html_body)
+        print(
+            f"  ✗ LLM maintenance analysis failed ({llm_text}); "
+            f"falling back to static report.",
+            flush=True,
+        )
+    else:
+        print(
+            "  LLM maintenance analysis: no api_key configured – using static report.",
+            flush=True,
+        )
 
     # ── Static fallback ───────────────────────────────────────────────────
     return _build_static_report(raw)

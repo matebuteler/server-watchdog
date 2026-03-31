@@ -113,6 +113,16 @@ def main():
     hostname = get_hostname()
     lookback = config.getint("avc_monitor", "avc_lookback_days", fallback=7)
 
+    # ── 0. Startup diagnostics ─────────────────────────────────────────────
+    cfg_status = "found" if config.config_file_found else "NOT FOUND – using defaults"
+    print(f"Config: {config.config_path} ({cfg_status})", flush=True)
+    if not config.config_file_found:
+        print(
+            "  WARNING: Config file not found. "
+            "Create it at the path above or set WATCHDOG_CONFIG.",
+            flush=True,
+        )
+
     # ── 1. AVC denial snapshot ─────────────────────────────────────────────
     print(f"Reading AVC denials from the last {lookback} days…", flush=True)
     denials = read_current_avc_denials(config)

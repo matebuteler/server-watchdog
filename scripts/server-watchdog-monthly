@@ -13,14 +13,27 @@ def main():
     config = Config()
     setup_logging(config)
 
-    plain, html = build_report(config)
-
     import socket  # pylint: disable=import-outside-toplevel
     hostname = socket.getfqdn()
+
+    cfg_status = "found" if config.config_file_found else "NOT FOUND – using defaults"
+    print(f"Config: {config.config_path} ({cfg_status})", flush=True)
+    if not config.config_file_found:
+        print(
+            "  WARNING: Config file not found. "
+            "Create it at the path above or set WATCHDOG_CONFIG.",
+            flush=True,
+        )
+
+    print("Running maintenance checks…", flush=True)
+    plain, html = build_report(config)
+
     subject = f"Monthly Maintenance Report – {hostname}"
 
+    print("Sending email…", flush=True)
     try:
         send_email(config, subject, plain, html)
+        print("✓ Email sent successfully.", flush=True)
     except Exception as exc:  # pylint: disable=broad-except
         print(f"ERROR: Failed to send monthly report: {exc}", file=sys.stderr)
         sys.exit(1)

@@ -86,3 +86,36 @@ class TestConfigFileOverride:
         monkeypatch.setenv("WATCHDOG_CONFIG", str(cfg_file))
         cfg = Config()
         assert cfg.get("email", "to_addr") == "ops@example.com"
+
+
+class TestConfigDiagnostics:
+    """Config exposes its path and whether the file was loaded."""
+
+    def test_config_path_reflects_given_path(self):
+        cfg = Config(config_path="/tmp/does_not_exist_watchdog.ini")
+        assert cfg.config_path == "/tmp/does_not_exist_watchdog.ini"
+
+    def test_config_path_uses_default_when_none_given(self):
+        from server_watchdog.config import DEFAULT_CONFIG_PATH  # noqa: PLC0415
+        # Don't actually read /etc/server-watchdog/config.ini if it exists;
+        # just verify the path attribute is set correctly.
+        cfg = Config.__new__(Config)
+        cfg._config_path = DEFAULT_CONFIG_PATH
+        assert cfg.config_path == DEFAULT_CONFIG_PATH
+
+    def test_config_file_found_false_when_missing(self):
+        cfg = Config(config_path="/tmp/does_not_exist_watchdog.ini")
+        assert cfg.config_file_found is False
+
+    def test_config_file_found_true_when_present(self, tmp_path):
+        cfg_file = tmp_path / "watchdog.ini"
+        cfg_file.write_text("[llm]\napi_key = testkey\n")
+        cfg = Config(config_path=str(cfg_file))
+        assert cfg.config_file_found is True
+
+    def test_config_file_found_true_reads_values(self, tmp_path):
+        cfg_file = tmp_path / "watchdog.ini"
+        cfg_file.write_text("[llm]\napi_key = mykey123\n")
+        cfg = Config(config_path=str(cfg_file))
+        assert cfg.config_file_found is True
+        assert cfg.get("llm", "api_key") == "mykey123"
