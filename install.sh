@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local}"
+INSTALL_PREFIX="${INSTALL_PREFIX:-/usr}"
 VENV_DIR="/opt/server-watchdog/venv"
 CONFIG_DIR="/etc/server-watchdog"
 LOG_DIR="/var/log/server-watchdog"

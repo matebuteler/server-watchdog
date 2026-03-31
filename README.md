@@ -34,7 +34,7 @@ The script will:
 1. Create a Python virtual environment in `/opt/server-watchdog/venv`.
 2. Install Python dependencies (`google-genai`) into the venv.
 3. Install the package into the venv via `pip`.
-4. Symlink the entry-point scripts from the venv into `/usr/local/bin/`.
+4. Symlink the entry-point scripts from the venv into `/usr/bin/`.
 5. Create `/etc/server-watchdog/config.ini` from the example file.
 6. Install and enable the systemd units.
 
@@ -57,9 +57,14 @@ sudo bash install.sh
 
 The installer is safe to run on an existing installation:
 - The Python venv is updated in-place; your packages are upgraded.
-- Any new entry-point scripts are symlinked into `/usr/local/bin/`.
+- Any new entry-point scripts are symlinked into `/usr/bin/`.
 - Your existing `/etc/server-watchdog/config.ini` is **not** overwritten.
 - Systemd units are refreshed and services restarted automatically.
+
+> **Note for users who installed an earlier version:** older releases placed
+> the scripts in `/usr/local/bin/`, which is absent from root's `PATH` on RHEL
+> when running commands via `sudo`.  Re-running `sudo bash install.sh` moves
+> the symlinks to `/usr/bin/` and fixes this automatically.
 
 ---
 

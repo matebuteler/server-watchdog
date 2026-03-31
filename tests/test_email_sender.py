@@ -107,3 +107,35 @@ class TestSendEmail:
             send_email(cfg, "s", "b")
 
         mock_smtp.starttls.assert_not_called()
+
+    def test_ssl_error_raises_runtime_error_with_hint(self):
+        """An ssl.SSLError should be re-raised as RuntimeError with config hints."""
+        import ssl  # pylint: disable=import-outside-toplevel
+        cfg = _make_config(**{"email.use_tls": "true"})
+
+        with patch("smtplib.SMTP_SSL", side_effect=ssl.SSLError("WRONG_VERSION_NUMBER")):
+            with pytest.raises(RuntimeError) as exc_info:
+                send_email(cfg, "s", "b")
+
+        msg = str(exc_info.value)
+        assert "use_tls" in msg
+        assert "use_starttls" in msg
+
+    def test_ssl_error_on_plain_smtp_raises_runtime_error_with_hint(self):
+        """ssl.SSLError on a plain SMTP connection is also wrapped with a hint."""
+        import ssl  # pylint: disable=import-outside-toplevel
+        cfg = _make_config()  # use_tls = false, use_starttls = false
+
+        mock_smtp = MagicMock()
+        mock_smtp.starttls.side_effect = ssl.SSLError("WRONG_VERSION_NUMBER")
+
+        # Trigger via starttls path
+        cfg2 = _make_config(**{"email.use_starttls": "true"})
+        mock_smtp2 = MagicMock()
+        mock_smtp2.starttls.side_effect = ssl.SSLError("WRONG_VERSION_NUMBER")
+
+        with patch("smtplib.SMTP", return_value=mock_smtp2):
+            with pytest.raises(RuntimeError) as exc_info:
+                send_email(cfg2, "s", "b")
+
+        assert "use_tls" in str(exc_info.value)

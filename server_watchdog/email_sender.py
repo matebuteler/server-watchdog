@@ -2,6 +2,7 @@
 
 import logging
 import smtplib
+import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -61,6 +62,19 @@ def send_email(config, subject, body_text, body_html=None):
         smtp.sendmail(from_addr, [to_addr], msg.as_string())
         smtp.quit()
         logger.info("Email sent: %s", full_subject)
+    except ssl.SSLError as exc:
+        hint = (
+            f"SSL handshake with {smtp_host}:{smtp_port} failed ({exc}). "
+            "Check your [email] settings in config.ini:\n"
+            "  - If your server uses plain SMTP (port 25): "
+            "set use_tls = false and use_starttls = false\n"
+            "  - If your server uses STARTTLS (port 587): "
+            "set use_tls = false and use_starttls = true\n"
+            "  - If your server uses implicit TLS (port 465): "
+            "set use_tls = true and use_starttls = false"
+        )
+        logger.error(hint)
+        raise RuntimeError(hint) from exc
     except Exception as exc:
         logger.error("Failed to send email '%s': %s", full_subject, exc)
         raise
