@@ -6,9 +6,9 @@ setup(
     description="RHEL8 system maintenance daemon with SELinux AVC alerting",
     author="matebuteler",
     packages=find_packages(exclude=["tests*"]),
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     install_requires=[
-        "google-generativeai>=0.5.0",
+        "google-genai>=1.0.0",
     ],
     scripts=[
         "scripts/server-watchdog-monthly",

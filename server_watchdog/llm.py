@@ -63,18 +63,17 @@ def analyse_avc_denials(config, raw_denials):
 def _call_gemini(api_key, model_name, prompt):
     """Call the Google Gemini API and return the response text."""
     try:
-        import google.generativeai as genai  # pylint: disable=import-outside-toplevel
+        from google import genai  # pylint: disable=import-outside-toplevel
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(prompt)
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(model=model_name, contents=prompt)
         return response.text
     except ImportError:
         logger.error(
-            "google-generativeai package is not installed. "
-            "Install it with: pip install google-generativeai"
+            "google-genai package is not installed. "
+            "Install it with: pip install google-genai"
         )
-        return "(LLM analysis unavailable: google-generativeai not installed.)"
+        return "(LLM analysis unavailable: google-genai not installed.)"
     except Exception as exc:  # pylint: disable=broad-except
         logger.error("Gemini API call failed: %s", exc)
         return f"(LLM analysis failed: {exc})"

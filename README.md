@@ -17,7 +17,7 @@ A lightweight daemon for RHEL 8 that provides:
 | Requirement | Notes |
 |-------------|-------|
 | RHEL 8 / CentOS 8 | systemd, journald, auditd |
-| Python ≥ 3.8 | Usually pre-installed |
+| Python ≥ 3.10 | Usually pre-installed on RHEL 8+ |
 | `dnf`, `systemctl`, `journalctl` | Standard RHEL tools |
 | SMTP server | Local MTA (e.g. Postfix) or external SMTP |
 | Google Gemini API key | [Get one free](https://aistudio.google.com/app/apikey) |
@@ -31,7 +31,7 @@ sudo bash install.sh
 ```
 
 The script will:
-1. Install Python dependencies (`google-generativeai`).
+1. Install Python dependencies (`google-genai`).
 2. Install the package via `pip`.
 3. Create `/etc/server-watchdog/config.ini` from the example file.
 4. Install and enable the systemd units.
