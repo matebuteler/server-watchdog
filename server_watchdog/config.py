@@ -48,6 +48,7 @@ class Config:
             },
             "avc_monitor": {
                 "batch_interval": "60",
+                "avc_lookback_days": "7",
             },
             "logging": {
                 "log_file": "/var/log/server-watchdog/watchdog.log",

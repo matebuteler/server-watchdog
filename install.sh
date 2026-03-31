@@ -60,6 +60,7 @@ info "Installing server-watchdog package..."
 info "Linking entry-point scripts to ${INSTALL_PREFIX}/bin/..."
 ln -sf "$VENV_DIR/bin/server-watchdog-avc-monitor" "$INSTALL_PREFIX/bin/server-watchdog-avc-monitor"
 ln -sf "$VENV_DIR/bin/server-watchdog-monthly"     "$INSTALL_PREFIX/bin/server-watchdog-monthly"
+ln -sf "$VENV_DIR/bin/server-watchdog-send-now"       "$INSTALL_PREFIX/bin/server-watchdog-send-now"
 
 # ── Create directories ────────────────────────────────────────────────────────
 info "Creating directories..."

@@ -43,6 +43,26 @@ email settings and Gemini API key.
 
 ---
 
+## Upgrading
+
+If you already have server-watchdog installed and want to pick up new features
+(such as `server-watchdog-send-now`), pull the latest code and re-run the
+installer:
+
+```bash
+cd /path/to/server-watchdog   # wherever you cloned the repository
+git pull
+sudo bash install.sh
+```
+
+The installer is safe to run on an existing installation:
+- The Python venv is updated in-place; your packages are upgraded.
+- Any new entry-point scripts are symlinked into `/usr/local/bin/`.
+- Your existing `/etc/server-watchdog/config.ini` is **not** overwritten.
+- Systemd units are refreshed and services restarted automatically.
+
+---
+
 ## Configuration
 
 Copy `config.ini.example` to `/etc/server-watchdog/config.ini` and adjust:
@@ -118,6 +138,33 @@ systemctl start server-watchdog-monthly.service
 
 ---
 
+## On-demand report
+
+To send a single email **right now** containing all recent AVC denials and the
+current system status, run:
+
+```bash
+sudo server-watchdog-send-now
+```
+
+The command will:
+
+1. Read all `avc: denied` messages from the last `avc_lookback_days` days of
+   the systemd journal (default: 7 days).
+2. Pass them to the configured LLM for analysis (if an API key is set).
+3. Run the full system-status check (same as the monthly report: package
+   updates, failed services, storage, journal errors).
+4. Send a single email combining both sections to the configured recipient.
+
+This is useful for verifying your email and LLM configuration and for
+checking what the current state of the system looks like without waiting
+for a scheduled run.
+
+> **Tip:** The lookback window is controlled by `avc_lookback_days` in the
+> `[avc_monitor]` section of `config.ini`.
+
+---
+
 ## Development
 
 ```bash
@@ -137,12 +184,13 @@ server_watchdog/
 ├── email_sender.py    – SMTP email helper
 ├── llm.py             – Gemini LLM integration (AVC analysis)
 ├── maintenance.py     – Monthly system checks and report builder
-├── avc_monitor.py     – Real-time AVC denial watcher (daemon)
+├── avc_monitor.py     – Real-time AVC denial watcher (daemon) + snapshot reader
 └── logging_setup.py   – Shared logging configuration
 
 scripts/
 ├── server-watchdog-monthly       – Entry point for monthly report
-└── server-watchdog-avc-monitor   – Entry point for AVC daemon
+├── server-watchdog-avc-monitor   – Entry point for AVC daemon
+└── server-watchdog-send-now      – Entry point for on-demand email
 
 systemd/
 ├── server-watchdog-avc.service

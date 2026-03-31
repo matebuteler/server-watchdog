@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from server_watchdog.avc_monitor import AVCMonitor, _markdown_to_html
+from server_watchdog.avc_monitor import AVCMonitor, _markdown_to_html, read_current_avc_denials
 from server_watchdog.config import Config
 from server_watchdog.utils import escape_html
 
@@ -139,3 +139,86 @@ class TestHelpers:
         result = _markdown_to_html("- list item")
         assert "<li>" in result
         assert "list item" in result
+
+
+# ---------------------------------------------------------------------------
+# read_current_avc_denials
+# ---------------------------------------------------------------------------
+
+import json
+import subprocess
+
+
+def _journal_output(*messages):
+    """Build fake journalctl stdout bytes containing the given MESSAGE values."""
+    lines = [json.dumps({"MESSAGE": m}) for m in messages]
+    return "\n".join(lines).encode()
+
+
+class TestReadCurrentAvcDenials:
+    def _cfg(self, **overrides):
+        cfg = _make_config(**overrides)
+        return cfg
+
+    def test_returns_only_avc_lines(self):
+        journal_bytes = _journal_output(
+            "avc: denied { read } for pid=1234",
+            "normal kernel message",
+            "AVC: denied { write } for pid=5678",   # uppercase AVC also matches
+        )
+        completed = MagicMock()
+        completed.stdout = journal_bytes
+        completed.returncode = 0
+
+        with patch("subprocess.run", return_value=completed):
+            denials = read_current_avc_denials(self._cfg())
+
+        assert len(denials) == 2
+        assert all("denied" in d.lower() for d in denials)
+
+    def test_empty_journal_returns_empty_list(self):
+        completed = MagicMock()
+        completed.stdout = b""
+        completed.returncode = 0
+
+        with patch("subprocess.run", return_value=completed):
+            denials = read_current_avc_denials(self._cfg())
+
+        assert denials == []
+
+    def test_journalctl_not_found_returns_empty_list(self):
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            denials = read_current_avc_denials(self._cfg())
+
+        assert denials == []
+
+    def test_journalctl_timeout_returns_empty_list(self):
+        with patch("subprocess.run",
+                   side_effect=subprocess.TimeoutExpired("journalctl", 60)):
+            denials = read_current_avc_denials(self._cfg())
+
+        assert denials == []
+
+    def test_respects_avc_lookback_days(self):
+        completed = MagicMock()
+        completed.stdout = b""
+        completed.returncode = 0
+
+        with patch("subprocess.run", return_value=completed) as mock_run:
+            read_current_avc_denials(self._cfg(**{"avc_monitor.avc_lookback_days": "14"}))
+
+        cmd_args = mock_run.call_args[0][0]
+        assert any("14 days ago" in arg for arg in cmd_args)
+
+    def test_malformed_json_lines_are_skipped(self):
+        bad_output = b'not-json\n{"MESSAGE": "avc: denied { open }"}\nnot-json\n'
+        completed = MagicMock()
+        completed.stdout = bad_output
+        completed.returncode = 0
+
+        with patch("subprocess.run", return_value=completed):
+            denials = read_current_avc_denials(self._cfg())
+
+        assert len(denials) == 1
+        assert "avc: denied" in denials[0]
+

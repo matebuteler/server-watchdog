@@ -38,6 +38,9 @@ log_lookback_days = 30
 # Seconds to wait after the first AVC denial before flushing the batch.
 # Denials that arrive within this window are grouped into a single email.
 batch_interval = 60
+# How many days of journal history to scan when taking an on-demand snapshot
+# (used by the server-watchdog-test command).
+avc_lookback_days = 7
 
 [logging]
 log_file = /var/log/server-watchdog/watchdog.log

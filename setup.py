@@ -13,5 +13,6 @@ setup(
     scripts=[
         "scripts/server-watchdog-monthly",
         "scripts/server-watchdog-avc-monitor",
+        "scripts/server-watchdog-send-now",
     ],
 )

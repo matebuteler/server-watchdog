@@ -164,6 +164,58 @@ class AVCMonitor:
 
 
 # ---------------------------------------------------------------------------
+# Snapshot helper
+# ---------------------------------------------------------------------------
+
+def read_current_avc_denials(config):
+    """Return a list of recent AVC denial messages from the systemd journal.
+
+    Unlike the daemon's :meth:`AVCMonitor._follow_journal`, this is a
+    one-shot read of *existing* journal entries (no ``-f``).
+
+    Parameters
+    ----------
+    config:
+        A :class:`~server_watchdog.config.Config` instance.  The
+        ``[avc_monitor] avc_lookback_days`` key controls how many days of
+        journal history to scan (default: 7).
+
+    Returns
+    -------
+    list[str]
+        Each element is the raw ``MESSAGE`` field of one AVC denial entry.
+    """
+    lookback = config.getint("avc_monitor", "avc_lookback_days", fallback=7)
+    since = f"{lookback} days ago"
+    cmd = [
+        "journalctl",
+        "--output=json",
+        "--no-pager",
+        f"--since={since}",
+    ]
+    denials = []
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=60,
+        )
+        for raw_line in proc.stdout.splitlines():
+            try:
+                entry = json.loads(raw_line.decode("utf-8", errors="replace"))
+                msg = entry.get("MESSAGE", "")
+                if "avc: denied" in msg.lower():
+                    denials.append(msg)
+            except (json.JSONDecodeError, AttributeError):
+                continue
+    except FileNotFoundError:
+        logger.error("journalctl not found; cannot read AVC denials.")
+    except subprocess.TimeoutExpired:
+        logger.error("journalctl timed out while reading AVC denials.")
+    return denials
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
