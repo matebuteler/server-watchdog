@@ -1,0 +1,11 @@
+[Unit]
+Description=server-watchdog Monthly Maintenance Report Timer
+Documentation=https://github.com/matebuteler/server-watchdog
+
+[Timer]
+# Run on the first day of every month at 06:00 (local time)
+OnCalendar=monthly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

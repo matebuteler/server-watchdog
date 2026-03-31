@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Entry point: send an on-demand email with current AVC denials + system status.
+
+Usage
+-----
+    sudo server-watchdog-send-now            # uses /etc/server-watchdog/config.ini
+    sudo WATCHDOG_CONFIG=/path/to/config.ini server-watchdog-send-now
+
+The email contains two sections:
+  1. AVC Denials snapshot – all ``avc: denied`` messages found in the journal
+     over the last ``avc_lookback_days`` days (default: 7), with optional LLM
+     analysis when a Gemini API key is configured.
+  2. System Status – the same checks as the monthly maintenance report
+     (package updates, failed services, storage usage, journal errors).
+"""
+
+import sys
+
+from server_watchdog.avc_monitor import read_current_avc_denials, _build_alert_html, _markdown_to_html
+from server_watchdog.config import Config
+from server_watchdog.email_sender import send_email
+from server_watchdog.llm import analyse_avc_denials
+from server_watchdog.logging_setup import setup_logging
+from server_watchdog.maintenance import build_report
+from server_watchdog.utils import escape_html, get_hostname
+
+
+def _avc_section_text(denials, analysis, lookback):
+    """Return plain-text representation of the AVC snapshot."""
+    hostname = get_hostname()
+    from datetime import datetime  # pylint: disable=import-outside-toplevel
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if not denials:
+        return (
+            f"AVC Denials Snapshot (last {lookback} days)\n"
+            f"Host: {hostname}  |  Time: {now}\n"
+            f"No AVC denials found.\n"
+        )
+
+    raw_block = "\n".join(denials[:500])
+    if len(denials) > 500:
+        raw_block += f"\n... ({len(denials) - 500} more lines omitted)"
+
+    return (
+        f"AVC Denials Snapshot (last {lookback} days)\n"
+        f"Host: {hostname}  |  Time: {now}  |  Count: {len(denials)}\n"
+        f"\n--- RAW DENIALS ---\n{raw_block}\n"
+        f"\n--- LLM ANALYSIS ---\n{analysis}\n"
+    )
+
+
+def _avc_section_html(denials, analysis, lookback):
+    """Return HTML representation of the AVC snapshot."""
+    hostname = get_hostname()
+    from datetime import datetime  # pylint: disable=import-outside-toplevel
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if not denials:
+        return (
+            f"<h2>AVC Denials Snapshot (last {lookback} days)</h2>"
+            f"<p class='meta'><b>Host:</b> {escape_html(hostname)}&nbsp;|&nbsp;"
+            f"<b>Time:</b> {escape_html(now)}</p>"
+            f"<p>✅ No AVC denials found.</p>"
+        )
+
+    raw_block = "\n".join(denials[:500])
+    if len(denials) > 500:
+        raw_block += f"\n... ({len(denials) - 500} more lines omitted)"
+
+    analysis_html = _markdown_to_html(analysis)
+    return (
+        f"<h2>AVC Denials Snapshot (last {lookback} days)</h2>"
+        f"<p class='meta'><b>Host:</b> {escape_html(hostname)}&nbsp;|&nbsp;"
+        f"<b>Time:</b> {escape_html(now)}&nbsp;|&nbsp;"
+        f"<b>Count:</b> {len(denials)}</p>"
+        f"<h3>Raw Denials</h3>"
+        f"<pre>{escape_html(raw_block)}</pre>"
+        f"<h3>LLM Analysis</h3>"
+        f"<div class='analysis'>{analysis_html}</div>"
+    )
+
+
+def _wrap_html(body):
+    return f"""\
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {{ font-family: sans-serif; max-width: 960px; margin: 2em auto; }}
+  h1 {{ color: #333; }}
+  h2 {{ color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 4px; margin-top: 2em; }}
+  h3 {{ color: #555; border-bottom: 1px solid #ccc; padding-bottom: 4px; }}
+  pre {{ background: #f4f4f4; padding: 1em; overflow-x: auto; white-space: pre-wrap;
+         font-size: 0.85em; }}
+  .meta {{ color: #666; margin-bottom: 1em; }}
+  .analysis {{ line-height: 1.6; }}
+  .error {{ color: red; }}
+  details summary {{ cursor: pointer; color: #0066cc; }}
+</style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
+
+
+def main():
+    config = Config()
+    setup_logging(config)
+
+    hostname = get_hostname()
+    lookback = config.getint("avc_monitor", "avc_lookback_days", fallback=7)
+
+    # ── 0. Startup diagnostics ─────────────────────────────────────────────
+    cfg_status = "found" if config.config_file_found else "NOT FOUND – using defaults"
+    print(f"Config: {config.config_path} ({cfg_status})", flush=True)
+    if not config.config_file_found:
+        print(
+            "  WARNING: Config file not found. "
+            "Create it at the path above or set WATCHDOG_CONFIG.",
+            flush=True,
+        )
+
+    # ── 1. AVC denial snapshot ─────────────────────────────────────────────
+    print(f"Reading AVC denials from the last {lookback} days…", flush=True)
+    denials = read_current_avc_denials(config)
+    print(f"  Found {len(denials)} AVC denial(s).", flush=True)
+
+    if denials:
+        print("  Requesting LLM analysis…", flush=True)
+        analysis = analyse_avc_denials(config, denials)
+    else:
+        analysis = ""
+
+    avc_text = _avc_section_text(denials, analysis, lookback)
+    avc_html = _avc_section_html(denials, analysis, lookback)
+
+    # ── 2. Maintenance / system-status report ──────────────────────────────
+    print("Running system status checks…", flush=True)
+    status_text, status_html = build_report(config)
+
+    # ── 3. Combine and send ────────────────────────────────────────────────
+    plain = avc_text + "\n" + "=" * 72 + "\n\n" + status_text
+    html = _wrap_html(
+        f"<h1>🔍 On-demand Report – {escape_html(hostname)}</h1>"
+        + avc_html
+        + "<hr>"
+        + status_html.replace("<!DOCTYPE html>", "")
+               .replace("<html>", "").replace("</html>", "")
+               .replace("<head>", "").replace("</head>", "")
+               .replace("<body>", "").replace("</body>", "")
+               # strip the <style> block from the maintenance sub-report
+               .split("</style>")[-1]
+    )
+
+    subject = f"On-demand report: AVC denials + system status – {hostname}"
+
+    print("Sending email…", flush=True)
+    try:
+        send_email(config, subject, plain, html)
+        print("✓ Email sent successfully.", flush=True)
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"ERROR: Failed to send email: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

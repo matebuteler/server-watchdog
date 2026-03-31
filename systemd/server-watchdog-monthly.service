@@ -1,0 +1,20 @@
+[Unit]
+Description=server-watchdog Monthly Maintenance Report
+Documentation=https://github.com/matebuteler/server-watchdog
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/server-watchdog-monthly
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=server-watchdog-monthly
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/var/log/server-watchdog

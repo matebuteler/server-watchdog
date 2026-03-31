@@ -1,0 +1,60 @@
+[email]
+# SMTP server address (default: localhost for a local MTA like Postfix)
+smtp_host = localhost
+smtp_port = 25
+# Sender address shown in the From: header (e.g. watchdog@mydomain.org)
+from_addr = watchdog@localhost
+to_addr   = admin@example.com
+# Set use_tls = true to wrap the connection in SSL/TLS (port 465, SMTP_SSL).
+# Set use_starttls = true to upgrade a plain connection with STARTTLS (port 587).
+# Use use_starttls when relaying through Gmail or another provider on port 587.
+use_tls      = false
+use_starttls = false
+# Leave empty if no SMTP authentication is required
+username  =
+password  =
+# Prefix prepended to every email subject
+subject_prefix = [server-watchdog]
+
+[llm]
+# LLM provider for AVC denial analysis.  Currently supported: "gemini"
+provider  = gemini
+# Your Google Gemini API key (https://aistudio.google.com/app/apikey)
+api_key   = YOUR_GEMINI_API_KEY_HERE
+# Model name – see https://ai.google.dev/models/gemini for available models
+model     = gemini-1.5-pro
+
+[maintenance]
+# Monthly check flags (true/false)
+check_packages  = true
+check_services  = true
+check_storage   = true
+# Warn when a filesystem exceeds this percentage of usage
+storage_threshold = 80
+# How many days of journal history to scan for error/critical messages
+log_lookback_days = 30
+# Coredumps older than this many days are excluded from the report
+coredump_age_days = 45
+
+[avc_monitor]
+# Seconds to wait after the first AVC denial before flushing the batch.
+# Denials that arrive within this window are grouped into a single email.
+batch_interval = 60
+# How many days of journal history to scan when taking an on-demand snapshot
+# (used by the server-watchdog-test command).
+avc_lookback_days = 7
+
+[logging]
+log_file = /var/log/server-watchdog/watchdog.log
+# DEBUG, INFO, WARNING, ERROR, or CRITICAL
+level    = INFO
+
+[server]
+# Free-text description of this server's role and environment.
+# The LLM uses this to tailor recommendations (e.g. skip Bluetooth warnings
+# on a headless workstation, or flag EDA-tool crashes as high-severity).
+context = EDA workstation on a private network. Accessed via VNC. \
+No audio, Bluetooth, or consumer peripherals.
+# Optional extra UID→username mappings (comma-separated uid:name pairs).
+# When empty, /etc/passwd is used automatically.
+uid_map =
