@@ -18,15 +18,16 @@ error()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 # ── Preflight checks ──────────────────────────────────────────────────────────
 [[ $EUID -eq 0 ]] || error "This script must be run as root."
 command -v python3 &>/dev/null || error "python3 is required but not found."
-command -v pip3   &>/dev/null || warn "pip3 not found; attempting to install python3-pip."
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
+    || error "Python 3.10 or later is required (found $(python3 --version)). Install python3.10 or newer and re-run."
 
 # ── Python dependencies ───────────────────────────────────────────────────────
 info "Installing Python dependencies..."
-pip3 install --quiet -r "$(dirname "$0")/requirements.txt"
+python3 -m pip install --quiet -r "$(dirname "$0")/requirements.txt"
 
 # ── Install the Python package ────────────────────────────────────────────────
 info "Installing server-watchdog package..."
-pip3 install --quiet "$(dirname "$0")"
+python3 -m pip install --quiet "$(dirname "$0")"
 
 # ── Create directories ────────────────────────────────────────────────────────
 info "Creating directories..."
