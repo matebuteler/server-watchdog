@@ -18,13 +18,35 @@ error()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
 [[ $EUID -eq 0 ]] || error "This script must be run as root."
-command -v python3 &>/dev/null || error "python3 is required but not found."
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
-    || error "Python 3.10 or later is required (found $(python3 --version)). Install python3.10 or newer and re-run."
+
+# find_python – pick the newest Python in [3.10, 3.14] available on this host.
+# Tries versioned binaries from newest to oldest first, then falls back to the
+# plain 'python3' symlink.  Sets the global PYTHON variable.
+find_python() {
+    local minor
+    for minor in 14 13 12 11 10; do
+        if command -v "python3.${minor}" &>/dev/null; then
+            PYTHON="python3.${minor}"
+            return 0
+        fi
+    done
+    # Fall back to the plain python3 symlink and verify it meets the minimum.
+    if command -v python3 &>/dev/null; then
+        if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+            PYTHON="python3"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+find_python \
+    || error "Python 3.10 or later is required but not found. Install python3.10 or newer and re-run."
+info "Using $($PYTHON --version)"
 
 # ── Python virtual environment ────────────────────────────────────────────────
 info "Creating Python virtual environment in ${VENV_DIR}..."
-python3 -m venv "$VENV_DIR"
+"$PYTHON" -m venv "$VENV_DIR"
 
 # ── Python dependencies ───────────────────────────────────────────────────────
 info "Installing Python dependencies..."
