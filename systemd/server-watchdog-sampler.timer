@@ -3,10 +3,10 @@ Description=server-watchdog Bottleneck Sampler Timer
 Documentation=https://github.com/matebuteler/server-watchdog
 
 [Timer]
-# Take a bottleneck sample every 5 minutes.
+# Take a bottleneck sample every 60 seconds.
 # Adjust OnCalendar= or set AccuracySec= to match your needs.
-OnCalendar=*:0/5
-AccuracySec=30s
+OnCalendar=*:*:0/60
+AccuracySec=10s
 Persistent=true
 
 [Install]
