@@ -5,7 +5,7 @@ Documentation=https://github.com/matebuteler/server-watchdog
 [Timer]
 # Take a bottleneck sample every 60 seconds.
 # Adjust OnCalendar= or set AccuracySec= to match your needs.
-OnCalendar=*:*:0/60
+OnCalendar=minutely
 AccuracySec=10s
 Persistent=true
 
