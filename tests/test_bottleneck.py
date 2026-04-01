@@ -90,10 +90,11 @@ class TestTakeSample:
         for key in ("ts", "cpu", "iowait", "mem", "swap"):
             assert key in record
 
-    def test_missing_proc_stat_does_not_create_file(self, tmp_path):
+    def test_oserror_is_raised_and_no_file_created(self, tmp_path):
         data_file = str(tmp_path / "bottleneck.jsonl")
         with patch("server_watchdog.bottleneck.open", side_effect=OSError("no /proc")), \
-             patch("server_watchdog.bottleneck.time.sleep"):
+             patch("server_watchdog.bottleneck.time.sleep"), \
+             pytest.raises(OSError):
             take_sample(data_file=data_file, sample_interval=0)
         assert not Path(data_file).exists()
 

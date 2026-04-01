@@ -170,6 +170,7 @@ def take_sample(data_file=DEFAULT_DATA_FILE,
 
     except OSError as exc:
         logger.error("Failed to record bottleneck sample: %s", exc)
+        raise
 
 
 # ── Analyser (called at report time) ─────────────────────────────────────────
@@ -212,7 +213,9 @@ def analyze_bottlenecks(data_file=DEFAULT_DATA_FILE,
             "lookback_days": lookback_days,
             "error": (
                 "No sample data yet. "
-                "Ensure server-watchdog-sampler.timer is enabled."
+                "Ensure server-watchdog-sampler.timer is enabled and has run at least once. "
+                "If the timer is active but the file is still missing, check for write errors: "
+                "journalctl -u server-watchdog-sampler"
             ),
         }
 

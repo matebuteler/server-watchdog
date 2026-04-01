@@ -6,6 +6,8 @@ Each run records a compact JSON line containing CPU, IO-wait, memory, and
 swap percentages measured over a short sampling window.
 """
 
+import sys
+
 from server_watchdog.bottleneck import DEFAULT_DATA_FILE, DEFAULT_SAMPLE_INTERVAL, take_sample
 from server_watchdog.config import Config
 from server_watchdog.logging_setup import setup_logging
@@ -22,7 +24,14 @@ def main():
         "maintenance", "bottleneck_sample_interval_seconds",
         fallback=DEFAULT_SAMPLE_INTERVAL,
     )
-    take_sample(data_file=data_file, sample_interval=sample_interval)
+    try:
+        take_sample(data_file=data_file, sample_interval=sample_interval)
+    except OSError as exc:
+        print(
+            f"server-watchdog-sampler: failed to write sample to {data_file!r}: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
