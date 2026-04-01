@@ -17,4 +17,4 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
-ReadWritePaths=/var/log/server-watchdog
+ReadWritePaths=/var/log/server-watchdog /var/log/dnf.log /var/log/dnf.librepo.log /var/log/dnf.rpm.log

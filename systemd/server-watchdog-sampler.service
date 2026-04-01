@@ -1,0 +1,20 @@
+[Unit]
+Description=server-watchdog Bottleneck Sampler
+Documentation=https://github.com/matebuteler/server-watchdog
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/server-watchdog-sampler
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=server-watchdog-sampler
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/log/server-watchdog

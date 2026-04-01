@@ -35,6 +35,15 @@ storage_threshold = 80
 log_lookback_days = 30
 # Coredumps older than this many days are excluded from the report
 coredump_age_days = 45
+# Bottleneck analysis: reads historical samples collected by the sampler timer
+check_bottlenecks = true
+# How many days of bottleneck history to include in the report
+bottleneck_lookback_days = 14
+# Path to the JSONL file written by server-watchdog-sampler
+bottleneck_data_file = /var/log/server-watchdog/bottleneck.jsonl
+# How many seconds the sampler waits between its two /proc/stat reads
+# (controls per-sample measurement window; 2 s is sufficient)
+bottleneck_sample_interval_seconds = 2
 
 [avc_monitor]
 # Seconds to wait after the first AVC denial before flushing the batch.
@@ -53,8 +62,8 @@ level    = INFO
 # Free-text description of this server's role and environment.
 # The LLM uses this to tailor recommendations (e.g. skip Bluetooth warnings
 # on a headless workstation, or flag EDA-tool crashes as high-severity).
-context = EDA workstation on a private network. Accessed via VNC. \
-No audio, Bluetooth, or consumer peripherals.
+# This value is auto-detected and pre-filled by install.sh.
+context = Linux server
 # Optional extra UID→username mappings (comma-separated uid:name pairs).
 # When empty, /etc/passwd is used automatically.
 uid_map =

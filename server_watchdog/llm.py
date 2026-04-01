@@ -75,7 +75,17 @@ and whether it looks like a known issue. Assess severity briefly.
 (collapse repetitive lines into counts).  Skip boot-time noise, \
 NetworkManager link-watch messages, and other expected transient messages.
 
-8. Keep the total report short enough to read in under 60 seconds.
+8. BOTTLENECKS: Near the top of the report, include one line summarising the \
+most impactful system bottleneck(s) over the lookback period \
+(e.g. "Current bottleneck: IO wait (80%), CPU (20%) — last 14 days"). \
+The percentages are performance impact scores (0–100) that combine \
+severity, frequency, and VNC-user relevance — higher means the bottleneck \
+more noticeably degraded interactive sessions. \
+If no bottleneck data is available or no thresholds were exceeded, say so \
+briefly.  Add context where useful (e.g. IO wait expected on an NFS-heavy \
+workstation; high swap is always worth flagging).
+
+9. Keep the total report short enough to read in under 60 seconds.
    Use emoji indicators consistently: 🔴 critical, ⚠️ warning, \
 ✅ ok/no action needed, ℹ️ informational.
 
@@ -228,6 +238,31 @@ def _build_maintenance_prompt(raw):
                 f"Full disk usage:\n{all_out}"
             )
 
+    # ── Bottlenecks ───────────────────────────────────────────────────────
+    bnk = raw.get("bottlenecks")
+    if bnk is None:
+        bottleneck_section = "Bottleneck check disabled."
+    elif bnk.get("error"):
+        bottleneck_section = f"No data: {bnk['error']}"
+    else:
+        lookback = bnk.get("lookback_days", 14)
+        total = bnk.get("total_samples", 0)
+        items = bnk.get("bottlenecks", [])
+        if items:
+            parts = ", ".join(f"{b['name']} ({b['score']}%)" for b in items)
+            bottleneck_section = (
+                f"Performance impact scores (last {lookback} days, "
+                f"{total} samples): {parts}\n"
+                "Scores (0–100) reflect how much each bottleneck type "
+                "degraded interactive user experience, weighted by severity, "
+                "frequency, and relevance to VNC sessions."
+            )
+        else:
+            bottleneck_section = (
+                f"No significant bottleneck impact detected in the last "
+                f"{lookback} days ({total} samples collected)."
+            )
+
     # ── Coredumps ─────────────────────────────────────────────────────────
     core = raw.get("coredumps", {})
     coredump_age = raw.get("coredump_age", 45)
@@ -252,6 +287,7 @@ def _build_maintenance_prompt(raw):
         journal_section = f"No error/critical messages in the last {lookback} days."
 
     raw_data_text = (
+        f"### System Bottlenecks\n{bottleneck_section}\n\n"
         f"### Package Updates\n{packages_section}\n\n"
         f"### Failed Services\n{services_section}\n\n"
         f"### Storage Usage (threshold: {threshold}%)\n{storage_section}\n\n"

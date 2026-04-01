@@ -28,11 +28,33 @@ def escape_html(text):
     )
 
 
+def _apply_inline_markdown(text):
+    """Apply inline Markdown rules to already-HTML-escaped text.
+
+    Handles inline code (`` `…` ``) and bold (``**…**``).  Code spans are
+    extracted first and replaced with placeholders so that asterisks inside
+    backtick spans are never interpreted as bold markers.
+    """
+    # Extract code spans, replace with placeholders, then restore after bold.
+    code_spans = []
+
+    def _extract_code(m):
+        placeholder = f"\x00CODE{len(code_spans)}\x00"
+        code_spans.append(f"<code>{m.group(1)}</code>")
+        return placeholder
+
+    text = re.sub(r"`(.+?)`", _extract_code, text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    for i, span in enumerate(code_spans):
+        text = text.replace(f"\x00CODE{i}\x00", span)
+    return text
+
+
 def markdown_to_html(text):
     """Very minimal Markdown-to-HTML conversion for LLM output.
 
-    Handles headings (# / ## / ###), bold (**text**), bullet lists
-    (``- `` / ``* ``), horizontal rules (---), and blank lines.
+    Handles headings (# / ## / ###), bold (**text**), inline code (`text`),
+    bullet lists (``- `` / ``* ``), horizontal rules (---), and blank lines.
     """
     html_lines = []
     for line in text.splitlines():
@@ -48,13 +70,14 @@ def markdown_to_html(text):
             html_lines.append("<hr>")
         # Bullet points
         elif line.startswith("- ") or line.startswith("* "):
-            html_lines.append(f"<li>{escape_html(line[2:])}</li>")
+            html_lines.append(
+                f"<li>{_apply_inline_markdown(escape_html(line[2:]))}</li>"
+            )
         # Blank line → spacer
         elif not line.strip():
             html_lines.append("<br>")
         else:
-            escaped = escape_html(line)
-            escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+            escaped = _apply_inline_markdown(escape_html(line))
             html_lines.append(f"<p>{escaped}</p>")
     return "\n".join(html_lines)
 

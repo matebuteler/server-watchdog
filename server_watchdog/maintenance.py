@@ -4,6 +4,7 @@ import logging
 import subprocess
 from datetime import datetime, timedelta
 
+from .bottleneck import DEFAULT_LOOKBACK_DAYS, check_bottlenecks
 from .utils import escape_html, get_hostname, get_uid_map, markdown_to_html
 
 logger = logging.getLogger(__name__)
@@ -315,6 +316,7 @@ def build_report(config):
 
     jnl_data = check_journal_errors(lookback_days=lookback)
     core_data = check_coredumps(max_age_days=coredump_age)
+    bnk_data = check_bottlenecks(config)
 
     raw = {
         "hostname": hostname,
@@ -326,6 +328,7 @@ def build_report(config):
         "storage": sto_data,
         "journal_errors": jnl_data,
         "coredumps": core_data,
+        "bottlenecks": bnk_data,
         "threshold": threshold,
         "lookback": lookback,
         "coredump_age": coredump_age,
@@ -346,11 +349,15 @@ def build_report(config):
         llm_text = analyse_maintenance_report(config, raw)
         if llm_text and not llm_text.startswith("(LLM"):
             print("  ✓ LLM maintenance analysis complete.", flush=True)
+            bnk_data = raw.get("bottlenecks")
+            bnk_line = _format_bottleneck_line(bnk_data)
             html_body = (
                 f"<h1>Server Maintenance Report</h1>"
                 f"<p><b>Host:</b> {escape_html(hostname)}&nbsp;|&nbsp;"
                 f"<b>Date:</b> {escape_html(now)}</p>"
-                f"<div class='llm-report'>{markdown_to_html(llm_text)}</div>"
+                + (f"<p><b>Current bottleneck:</b> {escape_html(bnk_line)}</p>"
+                   if bnk_line else "")
+                + f"<div class='llm-report'>{markdown_to_html(llm_text)}</div>"
             )
             return llm_text, _wrap_html(html_body)
         print(
@@ -368,6 +375,20 @@ def build_report(config):
     return _build_static_report(raw)
 
 
+def _format_bottleneck_line(bnk_data):
+    """Return a short human-readable bottleneck summary, or an empty string."""
+    if bnk_data is None:
+        return ""
+    if bnk_data.get("error"):
+        return f"(data unavailable: {bnk_data['error']})"
+    items = bnk_data.get("bottlenecks", [])
+    lookback = bnk_data.get("lookback_days", DEFAULT_LOOKBACK_DAYS)
+    if not items:
+        return f"None detected (last {lookback} days)"
+    parts = ", ".join(f"{b['name']} ({b['score']}%)" for b in items)
+    return f"{parts} — last {lookback} days"
+
+
 def _build_static_report(raw):
     """Build a static plain-text / HTML report from *raw* data (no LLM)."""
     hostname = raw["hostname"]
@@ -380,9 +401,14 @@ def _build_static_report(raw):
     sections_html = []
 
     sections_text.append(f"Server Maintenance Report\nHost: {hostname}\nDate: {now}\n")
+    bnk_line = _format_bottleneck_line(raw.get("bottlenecks"))
+    if bnk_line:
+        sections_text[-1] += f"Current bottleneck: {bnk_line}\n"
     sections_html.append(
         f"<h1>Server Maintenance Report</h1>"
         f"<p><b>Host:</b> {hostname}<br><b>Date:</b> {now}</p>"
+        + (f"<p><b>Current bottleneck:</b> {escape_html(bnk_line)}</p>"
+           if bnk_line else "")
     )
 
     # --- Packages ---

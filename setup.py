@@ -14,5 +14,6 @@ setup(
         "scripts/server-watchdog-monthly",
         "scripts/server-watchdog-avc-monitor",
         "scripts/server-watchdog-send-now",
+        "scripts/server-watchdog-sampler",
     ],
 )
