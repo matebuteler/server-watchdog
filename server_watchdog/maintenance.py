@@ -1,6 +1,8 @@
 """Monthly maintenance checks for server-watchdog."""
 
 import logging
+import os
+import shutil
 import subprocess
 from datetime import datetime, timedelta
 
@@ -11,17 +13,35 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Individual checks
+# Package manager detection and per-PM backends
 # ---------------------------------------------------------------------------
 
-def check_packages():
-    """Return a dict with available package updates.
+# Ordered list of (binary_name, canonical_name) to probe.
+# First match wins when package_manager = auto.
+_PM_CANDIDATES = [
+    ("dnf",     "dnf"),
+    ("apt-get", "apt"),
+    ("yum",     "yum"),
+    ("zypper",  "zypper"),
+]
 
-    Returns
-    -------
-    dict
-        ``{'updates': [...], 'error': None|str}``
+
+def detect_package_manager():
+    """Return the canonical name of the first available package manager.
+
+    Probes the system ``PATH`` for known package manager binaries in the order:
+    ``dnf`` → ``apt-get`` → ``yum`` → ``zypper``.
+
+    Returns ``None`` if none of them is found.
     """
+    for binary, name in _PM_CANDIDATES:
+        if shutil.which(binary):
+            return name
+    return None
+
+
+def _check_dnf():
+    """Run ``dnf check-update`` and return ``{'updates': [...], 'error': ...}``."""
     try:
         result = subprocess.run(
             ["dnf", "check-update", "--quiet"],
@@ -29,19 +49,153 @@ def check_packages():
             text=True,
             timeout=300,
         )
-        # exit code 100 means updates available; 0 means up-to-date
+        # exit code 100 → updates available; 0 → up-to-date
         if result.returncode not in (0, 100):
-            return {"updates": [], "error": result.stderr.strip() or "dnf check-update failed"}
-
+            return {
+                "updates": [],
+                "error": result.stderr.strip() or "dnf check-update failed",
+                "package_manager": "dnf",
+            }
         lines = [
             line for line in result.stdout.splitlines()
             if line.strip() and not line.startswith("Last metadata")
         ]
-        return {"updates": lines, "error": None}
+        return {"updates": lines, "error": None, "package_manager": "dnf"}
     except FileNotFoundError:
-        return {"updates": [], "error": "dnf not found"}
+        return {"updates": [], "error": "dnf not found", "package_manager": "dnf"}
     except subprocess.TimeoutExpired:
-        return {"updates": [], "error": "dnf check-update timed out"}
+        return {"updates": [], "error": "dnf check-update timed out", "package_manager": "dnf"}
+
+
+def _check_yum():
+    """Run ``yum check-update`` and return ``{'updates': [...], 'error': ...}``."""
+    try:
+        result = subprocess.run(
+            ["yum", "check-update", "--quiet"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        # exit code 100 → updates available; 0 → up-to-date
+        if result.returncode not in (0, 100):
+            return {
+                "updates": [],
+                "error": result.stderr.strip() or "yum check-update failed",
+                "package_manager": "yum",
+            }
+        lines = [
+            line for line in result.stdout.splitlines()
+            if line.strip() and not line.startswith("Loaded plugins")
+        ]
+        return {"updates": lines, "error": None, "package_manager": "yum"}
+    except FileNotFoundError:
+        return {"updates": [], "error": "yum not found", "package_manager": "yum"}
+    except subprocess.TimeoutExpired:
+        return {"updates": [], "error": "yum check-update timed out", "package_manager": "yum"}
+
+
+def _check_apt():
+    """Run ``apt-get -s upgrade`` and return ``{'updates': [...], 'error': ...}``."""
+    try:
+        result = subprocess.run(
+            ["apt-get", "--just-print", "upgrade"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+        )
+        if result.returncode != 0:
+            return {
+                "updates": [],
+                "error": result.stderr.strip() or "apt-get upgrade --just-print failed",
+                "package_manager": "apt",
+            }
+        # Lines like "Inst bash [5.0-6ubuntu1.1] (5.0-6ubuntu1.2 ...)"
+        lines = [
+            line for line in result.stdout.splitlines()
+            if line.startswith("Inst ")
+        ]
+        return {"updates": lines, "error": None, "package_manager": "apt"}
+    except FileNotFoundError:
+        return {"updates": [], "error": "apt-get not found", "package_manager": "apt"}
+    except subprocess.TimeoutExpired:
+        return {"updates": [], "error": "apt-get upgrade timed out", "package_manager": "apt"}
+
+
+def _check_zypper():
+    """Run ``zypper list-updates`` and return ``{'updates': [...], 'error': ...}``."""
+    try:
+        result = subprocess.run(
+            ["zypper", "--non-interactive", "list-updates"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            return {
+                "updates": [],
+                "error": result.stderr.strip() or "zypper list-updates failed",
+                "package_manager": "zypper",
+            }
+        # Lines starting with "v |" are available updates
+        lines = [
+            line for line in result.stdout.splitlines()
+            if line.startswith("v |")
+        ]
+        return {"updates": lines, "error": None, "package_manager": "zypper"}
+    except FileNotFoundError:
+        return {"updates": [], "error": "zypper not found", "package_manager": "zypper"}
+    except subprocess.TimeoutExpired:
+        return {"updates": [], "error": "zypper list-updates timed out", "package_manager": "zypper"}
+
+
+_PM_BACKENDS = {
+    "dnf":    _check_dnf,
+    "yum":    _check_yum,
+    "apt":    _check_apt,
+    "zypper": _check_zypper,
+}
+
+
+# ---------------------------------------------------------------------------
+# Individual checks
+# ---------------------------------------------------------------------------
+
+def check_packages(package_manager=None):
+    """Return a dict with available package updates.
+
+    Parameters
+    ----------
+    package_manager:
+        One of ``'dnf'``, ``'apt'``, ``'yum'``, ``'zypper'``, ``'auto'``,
+        or ``None``.  ``'auto'`` and ``None`` both trigger auto-detection via
+        :func:`detect_package_manager`.
+
+    Returns
+    -------
+    dict
+        ``{'updates': [...], 'error': None|str, 'package_manager': str|None}``
+    """
+    pm = package_manager
+    if pm in (None, "auto"):
+        pm = detect_package_manager()
+
+    if pm is None:
+        return {
+            "updates": [],
+            "error": "No supported package manager found (tried dnf, apt-get, yum, zypper)",
+            "package_manager": None,
+        }
+
+    backend = _PM_BACKENDS.get(pm)
+    if backend is None:
+        return {
+            "updates": [],
+            "error": f"Unknown package manager: {pm!r}",
+            "package_manager": pm,
+        }
+
+    return backend()
 
 
 def check_failed_services():
@@ -301,7 +455,8 @@ def build_report(config):
     sto_data = None
 
     if config.getboolean("maintenance", "check_packages", fallback=True):
-        pkg_data = check_packages()
+        pm = config.get("maintenance", "package_manager", fallback="auto")
+        pkg_data = check_packages(package_manager=pm)
 
     if config.getboolean("maintenance", "check_services", fallback=True):
         svc_data = check_failed_services()

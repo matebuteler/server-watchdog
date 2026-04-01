@@ -17,4 +17,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
-ReadWritePaths=/var/log/server-watchdog /var/log/dnf.log /var/log/dnf.librepo.log /var/log/dnf.rpm.log
+# Allow writes to the watchdog log dir and common package-manager log files.
+# Non-existent paths are silently ignored by systemd, so these entries are
+# safe on systems that use apt or zypper instead of dnf.
+ReadWritePaths=/var/log/server-watchdog /var/log/dnf.log /var/log/dnf.librepo.log /var/log/dnf.rpm.log /var/log/apt

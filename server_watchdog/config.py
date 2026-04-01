@@ -46,6 +46,7 @@ class Config:
                 "storage_threshold": "80",
                 "log_lookback_days": "30",
                 "coredump_age_days": "45",
+                "package_manager": "auto",
             },
             "avc_monitor": {
                 "batch_interval": "60",

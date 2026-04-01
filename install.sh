@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# install.sh – install server-watchdog on RHEL 8
+# install.sh – install server-watchdog on Linux
+# Supports RHEL/Fedora/CentOS (dnf/yum), Debian/Ubuntu (apt), openSUSE/SLES (zypper).
 # Run as root: sudo bash install.sh
 
 set -euo pipefail
@@ -68,8 +69,10 @@ detect_system_context() {
     fi
 
     # VNC
-    if rpm -q tigervnc-server &>/dev/null 2>&1 || \
-       systemctl list-unit-files 'vncserver*' --no-legend 2>/dev/null | grep -q .; then
+    if command -v vncserver &>/dev/null 2>&1 \
+       || rpm -q tigervnc-server &>/dev/null 2>&1 \
+       || dpkg -l tigervnc-standalone-server &>/dev/null 2>&1 \
+       || systemctl list-unit-files 'vncserver*' --no-legend 2>/dev/null | grep -q .; then
         parts+=("VNC remote desktop installed")
     fi
 

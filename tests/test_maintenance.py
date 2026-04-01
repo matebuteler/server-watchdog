@@ -8,12 +8,17 @@ import pytest
 
 from server_watchdog.config import Config
 from server_watchdog.maintenance import (
+    _check_apt,
+    _check_dnf,
+    _check_yum,
+    _check_zypper,
     build_report,
     check_coredumps,
     check_failed_services,
     check_journal_errors,
     check_packages,
     check_storage,
+    detect_package_manager,
     get_service_logs,
 )
 
@@ -35,15 +40,97 @@ def _completed(returncode, stdout="", stderr=""):
 
 
 # ---------------------------------------------------------------------------
+# detect_package_manager
+# ---------------------------------------------------------------------------
+
+class TestDetectPackageManager:
+    def test_returns_dnf_when_present(self):
+        def which_dnf(cmd):
+            return "/usr/bin/dnf" if cmd == "dnf" else None
+        with patch("server_watchdog.maintenance.shutil.which", side_effect=which_dnf):
+            assert detect_package_manager() == "dnf"
+
+    def test_returns_apt_when_dnf_absent(self):
+        def which_apt(cmd):
+            return "/usr/bin/apt-get" if cmd == "apt-get" else None
+        with patch("server_watchdog.maintenance.shutil.which", side_effect=which_apt):
+            assert detect_package_manager() == "apt"
+
+    def test_returns_yum_when_only_yum(self):
+        def which_yum(cmd):
+            return "/usr/bin/yum" if cmd == "yum" else None
+        with patch("server_watchdog.maintenance.shutil.which", side_effect=which_yum):
+            assert detect_package_manager() == "yum"
+
+    def test_returns_zypper_when_only_zypper(self):
+        def which_zypper(cmd):
+            return "/usr/bin/zypper" if cmd == "zypper" else None
+        with patch("server_watchdog.maintenance.shutil.which", side_effect=which_zypper):
+            assert detect_package_manager() == "zypper"
+
+    def test_returns_none_when_none_found(self):
+        with patch("server_watchdog.maintenance.shutil.which", return_value=None):
+            assert detect_package_manager() is None
+
+    def test_dnf_preferred_over_yum(self):
+        def which_both(cmd):
+            return f"/usr/bin/{cmd}" if cmd in ("dnf", "yum") else None
+        with patch("server_watchdog.maintenance.shutil.which", side_effect=which_both):
+            assert detect_package_manager() == "dnf"
+
+
+# ---------------------------------------------------------------------------
 # check_packages
 # ---------------------------------------------------------------------------
 
 class TestCheckPackages:
-    def test_no_updates(self):
-        with patch("subprocess.run", return_value=_completed(0, "")):
+    def test_auto_detects_package_manager(self):
+        fake = {"updates": [], "error": None, "package_manager": "dnf"}
+        with patch("server_watchdog.maintenance.detect_package_manager", return_value="dnf"), \
+             patch.dict("server_watchdog.maintenance._PM_BACKENDS", {"dnf": lambda: fake}):
             data = check_packages()
         assert data["error"] is None
+        assert data["package_manager"] == "dnf"
+
+    def test_explicit_pm_skips_detection(self):
+        fake = {"updates": [], "error": None, "package_manager": "apt"}
+        with patch("server_watchdog.maintenance.detect_package_manager") as mock_detect, \
+             patch.dict("server_watchdog.maintenance._PM_BACKENDS", {"apt": lambda: fake}):
+            data = check_packages(package_manager="apt")
+        mock_detect.assert_not_called()
+        assert data["package_manager"] == "apt"
+
+    def test_no_pm_found_returns_error(self):
+        with patch("server_watchdog.maintenance.detect_package_manager", return_value=None):
+            data = check_packages()
+        assert data["error"] is not None
+        assert "No supported package manager" in data["error"]
+        assert data["package_manager"] is None
+
+    def test_unknown_pm_returns_error(self):
+        data = check_packages(package_manager="pacman")
+        assert data["error"] is not None
+        assert "Unknown package manager" in data["error"]
+
+    def test_auto_string_also_triggers_detection(self):
+        with patch("server_watchdog.maintenance.detect_package_manager", return_value="yum") as m, \
+             patch("server_watchdog.maintenance._check_yum",
+                   return_value={"updates": [], "error": None, "package_manager": "yum"}):
+            check_packages(package_manager="auto")
+        m.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _check_dnf
+# ---------------------------------------------------------------------------
+
+class TestCheckDnf:
+    def test_no_updates(self):
+        with patch("subprocess.run", return_value=_completed(0, "")):
+            data = _check_dnf()
+        assert data["error"] is None
         assert data["updates"] == []
+        assert data["package_manager"] == "dnf"
 
     def test_updates_available(self):
         dnf_out = (
@@ -51,24 +138,157 @@ class TestCheckPackages:
             "curl.x86_64                  7.61.1-30.el8 baseos\n"
         )
         with patch("subprocess.run", return_value=_completed(100, dnf_out)):
-            data = check_packages()
+            data = _check_dnf()
         assert data["error"] is None
         assert len(data["updates"]) == 2
 
     def test_dnf_not_found(self):
         with patch("subprocess.run", side_effect=FileNotFoundError):
-            data = check_packages()
-        assert data["error"] is not None
+            data = _check_dnf()
         assert "dnf not found" in data["error"]
 
     def test_dnf_timeout(self):
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("dnf", 300)):
-            data = check_packages()
+            data = _check_dnf()
         assert "timed out" in data["error"]
 
     def test_dnf_error_exit(self):
         with patch("subprocess.run", return_value=_completed(1, "", "permission denied")):
-            data = check_packages()
+            data = _check_dnf()
+        assert data["error"] is not None
+
+    def test_last_metadata_line_filtered(self):
+        dnf_out = (
+            "Last metadata expiration check: 0:01:13 ago.\n"
+            "bash.x86_64  5.1.8  baseos\n"
+        )
+        with patch("subprocess.run", return_value=_completed(100, dnf_out)):
+            data = _check_dnf()
+        assert len(data["updates"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# _check_yum
+# ---------------------------------------------------------------------------
+
+class TestCheckYum:
+    def test_no_updates(self):
+        with patch("subprocess.run", return_value=_completed(0, "")):
+            data = _check_yum()
+        assert data["error"] is None
+        assert data["updates"] == []
+        assert data["package_manager"] == "yum"
+
+    def test_updates_available(self):
+        yum_out = (
+            "bash.x86_64  4.4.19-15.el7  base\n"
+            "curl.x86_64  7.29.0-59.el7  base\n"
+        )
+        with patch("subprocess.run", return_value=_completed(100, yum_out)):
+            data = _check_yum()
+        assert data["error"] is None
+        assert len(data["updates"]) == 2
+
+    def test_yum_not_found(self):
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            data = _check_yum()
+        assert "yum not found" in data["error"]
+
+    def test_yum_timeout(self):
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("yum", 300)):
+            data = _check_yum()
+        assert "timed out" in data["error"]
+
+    def test_yum_error_exit(self):
+        with patch("subprocess.run", return_value=_completed(1, "", "error")):
+            data = _check_yum()
+        assert data["error"] is not None
+
+
+# ---------------------------------------------------------------------------
+# _check_apt
+# ---------------------------------------------------------------------------
+
+class TestCheckApt:
+    def test_no_updates(self):
+        with patch("subprocess.run", return_value=_completed(0, "Reading package lists...\n")):
+            data = _check_apt()
+        assert data["error"] is None
+        assert data["updates"] == []
+        assert data["package_manager"] == "apt"
+
+    def test_updates_available(self):
+        apt_out = (
+            "Reading package lists...\n"
+            "Inst bash [5.0-6ubuntu1.1] (5.0-6ubuntu1.2 Ubuntu:focal-updates)\n"
+            "Inst curl [7.68.0-1ubuntu2.18] (7.68.0-1ubuntu2.20 Ubuntu:focal-updates)\n"
+            "Conf bash (5.0-6ubuntu1.2 Ubuntu:focal-updates)\n"
+        )
+        with patch("subprocess.run", return_value=_completed(0, apt_out)):
+            data = _check_apt()
+        assert data["error"] is None
+        # Only "Inst " lines are counted
+        assert len(data["updates"]) == 2
+        assert all(u.startswith("Inst ") for u in data["updates"])
+
+    def test_apt_not_found(self):
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            data = _check_apt()
+        assert "apt-get not found" in data["error"]
+
+    def test_apt_timeout(self):
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("apt-get", 300)):
+            data = _check_apt()
+        assert "timed out" in data["error"]
+
+    def test_apt_error_exit(self):
+        with patch("subprocess.run", return_value=_completed(1, "", "E: some error")):
+            data = _check_apt()
+        assert data["error"] is not None
+
+
+# ---------------------------------------------------------------------------
+# _check_zypper
+# ---------------------------------------------------------------------------
+
+class TestCheckZypper:
+    _ZYPPER_OUT = (
+        "Loading repository data...\n"
+        "Reading installed packages...\n"
+        "S | Repository         | Name | Current | Available | Arch\n"
+        "--+--------------------+------+---------+-----------+------\n"
+        "v | openSUSE-Leap-15.4 | bash | 4.4-23  | 4.4-26    | x86_64\n"
+        "v | openSUSE-Leap-15.4 | curl | 7.79-3  | 7.79-4    | x86_64\n"
+    )
+
+    def test_no_updates(self):
+        out = "Loading repository data...\nReading installed packages...\n"
+        with patch("subprocess.run", return_value=_completed(0, out)):
+            data = _check_zypper()
+        assert data["error"] is None
+        assert data["updates"] == []
+        assert data["package_manager"] == "zypper"
+
+    def test_updates_available(self):
+        with patch("subprocess.run", return_value=_completed(0, self._ZYPPER_OUT)):
+            data = _check_zypper()
+        assert data["error"] is None
+        assert len(data["updates"]) == 2
+        assert all(u.startswith("v |") for u in data["updates"])
+
+    def test_zypper_not_found(self):
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            data = _check_zypper()
+        assert "zypper not found" in data["error"]
+
+    def test_zypper_timeout(self):
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("zypper", 300)):
+            data = _check_zypper()
+        assert "timed out" in data["error"]
+
+    def test_zypper_error_exit(self):
+        with patch("subprocess.run", return_value=_completed(1, "", "error")):
+            data = _check_zypper()
         assert data["error"] is not None
 
 

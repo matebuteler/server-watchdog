@@ -29,6 +29,10 @@ model     = gemini-1.5-pro
 check_packages  = true
 check_services  = true
 check_storage   = true
+# Package manager to use for update checks.
+# 'auto' probes for dnf, apt-get, yum, zypper in that order.
+# Override with: dnf | apt | yum | zypper
+package_manager = auto
 # Warn when a filesystem exceeds this percentage of usage
 storage_threshold = 80
 # How many days of journal history to scan for error/critical messages
