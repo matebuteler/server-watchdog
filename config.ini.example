@@ -22,7 +22,7 @@ provider  = gemini
 # Your Google Gemini API key (https://aistudio.google.com/app/apikey)
 api_key   = YOUR_GEMINI_API_KEY_HERE
 # Primary model – Gemini 3 Flash is recommended (highest intelligence on free tier).
-# See https://ai.google.dev/models/gemini for the exact model name for your account.
+# See https://ai.google.dev/models/gemini for current available model names.
 model     = gemini-3.0-flash
 # Fallback model used when the primary model's free-tier rate limits are
 # exhausted (5 RPM / 250 000 TPM / 20 RPD).  Each model tracks its own
