@@ -40,7 +40,7 @@ class TestAnalyseAVCDenials:
 
         assert result == "## Analysis\n\nLooks fine."
         mock_call.assert_called_once()
-        api_key_arg, model_arg, prompt_arg = mock_call.call_args[0]
+        api_key_arg, model_arg, prompt_arg, *_ = mock_call.call_args[0]
         assert api_key_arg == "fake-key"
         assert model_arg == "gemini-1.5-pro"
         assert "avc: denied { open }" in prompt_arg
@@ -60,7 +60,7 @@ class TestAnalyseAVCDenials:
         with patch("server_watchdog.llm._call_gemini", return_value="ok") as mock_call:
             analyse_avc_denials(cfg, denials)
 
-        _, _, prompt = mock_call.call_args[0]
+        _, _, prompt, *_ = mock_call.call_args[0]
         for denial in denials:
             assert denial in prompt
 
@@ -119,7 +119,7 @@ class TestAnalyseMaintenanceReport:
 
         assert result == "## ✅ Healthy\n\nAll good."
         mock_call.assert_called_once()
-        _, _, prompt = mock_call.call_args[0]
+        _, _, prompt, *_ = mock_call.call_args[0]
         assert "bash.x86_64" in prompt
 
     def test_prompt_includes_server_context(self):
@@ -129,7 +129,7 @@ class TestAnalyseMaintenanceReport:
         with patch("server_watchdog.llm._call_gemini", return_value="ok") as mock_call:
             analyse_maintenance_report(cfg, raw)
 
-        _, _, prompt = mock_call.call_args[0]
+        _, _, prompt, *_ = mock_call.call_args[0]
         assert "EDA workstation" in prompt
         assert "VNC" in prompt
 
@@ -140,7 +140,7 @@ class TestAnalyseMaintenanceReport:
         with patch("server_watchdog.llm._call_gemini", return_value="ok") as mock_call:
             analyse_maintenance_report(cfg, raw)
 
-        _, _, prompt = mock_call.call_args[0]
+        _, _, prompt, *_ = mock_call.call_args[0]
         assert "mbuteler" in prompt
 
     def test_prompt_includes_nfs_label(self):
@@ -154,7 +154,7 @@ class TestAnalyseMaintenanceReport:
         with patch("server_watchdog.llm._call_gemini", return_value="ok") as mock_call:
             analyse_maintenance_report(cfg, raw)
 
-        _, _, prompt = mock_call.call_args[0]
+        _, _, prompt, *_ = mock_call.call_args[0]
         assert "NFS" in prompt or "nfs" in prompt.lower()
         assert "lower priority" in prompt
 
@@ -168,7 +168,7 @@ class TestAnalyseMaintenanceReport:
         with patch("server_watchdog.llm._call_gemini", return_value="ok") as mock_call:
             analyse_maintenance_report(cfg, raw)
 
-        _, _, prompt = mock_call.call_args[0]
+        _, _, prompt, *_ = mock_call.call_args[0]
         assert "/usr/bin/myapp" in prompt
 
     def test_prompt_includes_failed_service_logs(self):
@@ -182,7 +182,7 @@ class TestAnalyseMaintenanceReport:
         with patch("server_watchdog.llm._call_gemini", return_value="ok") as mock_call:
             analyse_maintenance_report(cfg, raw)
 
-        _, _, prompt = mock_call.call_args[0]
+        _, _, prompt, *_ = mock_call.call_args[0]
         assert "myapp.service" in prompt
         assert "segfault" in prompt
 

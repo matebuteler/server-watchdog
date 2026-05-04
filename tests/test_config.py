@@ -32,7 +32,7 @@ class TestConfigDefaults:
         assert self.cfg.get("llm", "provider") == "gemini"
 
     def test_llm_model(self):
-        assert self.cfg.get("llm", "model") == "gemini-1.5-pro"
+        assert self.cfg.get("llm", "model") == "gemini-2.5-flash"
 
     def test_maintenance_threshold(self):
         assert self.cfg.getint("maintenance", "storage_threshold") == 80

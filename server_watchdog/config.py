@@ -37,7 +37,9 @@ class Config:
             "llm": {
                 "provider": "gemini",
                 "api_key": "",
-                "model": "gemini-1.5-pro",
+                "model": "gemini-2.5-flash",
+                "fallback_model": "",
+                "rate_limit_state_path": "/var/lib/server-watchdog/rate_limit_state.json",
             },
             "maintenance": {
                 "check_packages": "true",

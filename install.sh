@@ -8,6 +8,7 @@ INSTALL_PREFIX="${INSTALL_PREFIX:-/usr}"
 VENV_DIR="/opt/server-watchdog/venv"
 CONFIG_DIR="/etc/server-watchdog"
 LOG_DIR="/var/log/server-watchdog"
+STATE_DIR="/var/lib/server-watchdog"
 SYSTEMD_DIR="/etc/systemd/system"
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
@@ -66,6 +67,7 @@ ln -sf "$VENV_DIR/bin/server-watchdog-send-now"       "$INSTALL_PREFIX/bin/serve
 info "Creating directories..."
 install -d -m 755 "$CONFIG_DIR"
 install -d -m 755 "$LOG_DIR"
+install -d -m 755 "$STATE_DIR"
 
 # ── Install configuration file ────────────────────────────────────────────────
 if [[ -f "$CONFIG_DIR/config.ini" ]]; then

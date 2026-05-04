@@ -2,6 +2,8 @@
 
 import logging
 
+from server_watchdog.rate_limiter import GeminiRateLimiter, estimate_tokens
+
 logger = logging.getLogger(__name__)
 
 ANALYSIS_PROMPT_TEMPLATE = """\
@@ -105,7 +107,9 @@ def analyse_avc_denials(config, raw_denials):
     """
     provider = config.get("llm", "provider", fallback="gemini").lower()
     api_key = config.get("llm", "api_key", fallback="")
-    model_name = config.get("llm", "model", fallback="gemini-1.5-pro")
+    model_name = config.get("llm", "model", fallback="gemini-2.5-flash")
+    fallback_model = config.get("llm", "fallback_model", fallback="")
+    state_path = config.get("llm", "rate_limit_state_path", fallback=None)
 
     if not api_key:
         logger.warning("LLM API key is not configured; skipping analysis.")
@@ -114,7 +118,8 @@ def analyse_avc_denials(config, raw_denials):
     prompt = ANALYSIS_PROMPT_TEMPLATE.format(raw_denials="\n".join(raw_denials))
 
     if provider == "gemini":
-        return _call_gemini(api_key, model_name, prompt)
+        rate_limiter = GeminiRateLimiter(state_path) if state_path else GeminiRateLimiter()
+        return _call_gemini(api_key, model_name, prompt, rate_limiter, fallback_model or None)
 
     logger.error("Unknown LLM provider: %s", provider)
     return f"(LLM analysis unavailable: unknown provider '{provider}'.)"
@@ -139,7 +144,9 @@ def analyse_maintenance_report(config, raw):
     """
     provider = config.get("llm", "provider", fallback="gemini").lower()
     api_key = config.get("llm", "api_key", fallback="")
-    model_name = config.get("llm", "model", fallback="gemini-1.5-pro")
+    model_name = config.get("llm", "model", fallback="gemini-2.5-flash")
+    fallback_model = config.get("llm", "fallback_model", fallback="")
+    state_path = config.get("llm", "rate_limit_state_path", fallback=None)
 
     if not api_key:
         logger.warning("LLM API key is not configured; skipping maintenance analysis.")
@@ -148,7 +155,8 @@ def analyse_maintenance_report(config, raw):
     prompt = _build_maintenance_prompt(raw)
 
     if provider == "gemini":
-        return _call_gemini(api_key, model_name, prompt)
+        rate_limiter = GeminiRateLimiter(state_path) if state_path else GeminiRateLimiter()
+        return _call_gemini(api_key, model_name, prompt, rate_limiter, fallback_model or None)
 
     logger.error("Unknown LLM provider: %s", provider)
     return f"(LLM analysis unavailable: unknown provider '{provider}'.)"
@@ -268,13 +276,49 @@ def _build_maintenance_prompt(raw):
     )
 
 
-def _call_gemini(api_key, model_name, prompt):
-    """Call the Google Gemini API and return the response text."""
+def _call_gemini(api_key, model_name, prompt, rate_limiter=None, fallback_model=None):
+    """Call the Google Gemini API and return the response text.
+
+    Checks free-tier rate limits before each call.  If the primary *model_name*
+    has exceeded its quota, the call is retried against *fallback_model* (when
+    configured) with a logged warning about potential capability differences.
+    """
+    if rate_limiter is None:
+        rate_limiter = GeminiRateLimiter()
+
+    token_estimate = estimate_tokens(prompt)
+
+    # Decide which model to use based on rate-limit headroom
+    model_to_use = model_name
+    if not rate_limiter.within_limits(model_name, token_estimate):
+        if fallback_model and rate_limiter.within_limits(fallback_model, token_estimate):
+            logger.warning(
+                "Rate limit reached for model '%s'; falling back to '%s'. "
+                "Note: '%s' may provide reduced intelligence compared to the "
+                "primary model.",
+                model_name, fallback_model, fallback_model,
+            )
+            model_to_use = fallback_model
+        else:
+            exhausted = (
+                f"'{model_name}' and '{fallback_model}'"
+                if fallback_model
+                else f"'{model_name}'"
+            )
+            logger.error(
+                "Rate limits exceeded for %s; skipping LLM call.", exhausted
+            )
+            return (
+                f"(LLM analysis unavailable: rate limits exceeded for {exhausted}."
+                " Try again later.)"
+            )
+
     try:
         from google import genai  # pylint: disable=import-outside-toplevel
 
         client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(model=model_name, contents=prompt)
+        response = client.models.generate_content(model=model_to_use, contents=prompt)
+        rate_limiter.record(model_to_use, token_estimate)
         return response.text
     except ImportError:
         logger.error(

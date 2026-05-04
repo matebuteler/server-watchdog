@@ -21,8 +21,17 @@ subject_prefix = [server-watchdog]
 provider  = gemini
 # Your Google Gemini API key (https://aistudio.google.com/app/apikey)
 api_key   = YOUR_GEMINI_API_KEY_HERE
-# Model name – see https://ai.google.dev/models/gemini for available models
-model     = gemini-1.5-pro
+# Primary model – Gemini 3 Flash is recommended (highest intelligence on free tier).
+# See https://ai.google.dev/models/gemini for the exact model name for your account.
+model     = gemini-3.0-flash
+# Fallback model used when the primary model's free-tier rate limits are
+# exhausted (5 RPM / 250 000 TPM / 20 RPD).  Each model tracks its own
+# independent quota, so the fallback effectively doubles your daily budget.
+# Leave empty to disable the fallback entirely.
+# Warning: falling back to an older model may provide reduced intelligence.
+fallback_model = gemini-2.5-flash
+# Path to the JSON file that persists rate-limit counters across restarts.
+rate_limit_state_path = /var/lib/server-watchdog/rate_limit_state.json
 
 [maintenance]
 # Monthly check flags (true/false)
