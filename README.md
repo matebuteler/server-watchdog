@@ -114,7 +114,9 @@ Example `~/.msmtprc` for Gmail:
 defaults
 auth           on
 tls            on
-tls_trust_file /etc/pki/tls/certs/ca-bundle.crt
+tls_trust_file /etc/pki/tls/certs/ca-bundle.crt      # RHEL/CentOS/Fedora
+# tls_trust_file /etc/ssl/ca-bundle.pem               # openSUSE/SLES
+# tls_trust_file /etc/ssl/certs/ca-certificates.crt   # Debian/Ubuntu
 logfile        ~/.msmtp.log
 
 account        gmail
