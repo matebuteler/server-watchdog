@@ -1,12 +1,10 @@
-"""Tests for the msmtp email backend."""
-
 import subprocess
 from unittest.mock import MagicMock, patch, call
 
 import pytest
 
 from server_watchdog.config import Config
-from server_watchdog.email_sender import send_email, _send_email_msmtp, _build_message
+from server_watchdog.email_sender import send_email, _send_email_msmtp, _build_message, _resolve_msmtp_env
 
 
 def _make_config(**overrides):
@@ -136,3 +134,50 @@ class TestMsmtpBackend:
 
         kwargs = mock_run.call_args[1]
         assert "my body content" in kwargs.get("input", "")
+
+    def test_msmtp_config_file_flag(self):
+        """msmtp_config_file passes --file to msmtp."""
+        cfg = _make_config(**{
+            "email.backend": "msmtp",
+            "email.msmtp_config_file": "/home/mateo/.msmtprc",
+        })
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            _send_email_msmtp(cfg, "Test", "body")
+
+        cmd = mock_run.call_args[0][0]
+        assert "--file" in cmd
+        assert "/home/mateo/.msmtprc" in cmd
+
+
+class TestResolveMsmtpEnv:
+    def test_no_sudo_user_returns_current_env(self):
+        """Without SUDO_USER the env is passed through unchanged (minus that key)."""
+        env = {"HOME": "/root", "PATH": "/usr/bin"}
+        with patch("os.environ", env):
+            result = _resolve_msmtp_env()
+        assert result["HOME"] == "/root"
+
+    def test_sudo_user_restores_home(self):
+        """SUDO_USER present → HOME is rewritten to that user's home dir."""
+        import pwd as _pwd
+        fake_pw = _pwd.struct_passwd(
+            ("mateo", "x", 1000, 1000, "", "/home/mateo", "/bin/bash")
+        )
+        env = {"HOME": "/root", "SUDO_USER": "mateo", "PATH": "/usr/bin"}
+        with patch("os.environ", env), \
+             patch("pwd.getpwnam", return_value=fake_pw):
+            result = _resolve_msmtp_env()
+        assert result["HOME"] == "/home/mateo"
+        assert result["USER"] == "mateo"
+
+    def test_sudo_user_unknown_leaves_home_unchanged(self):
+        """Unknown SUDO_USER (not in passwd) leaves HOME unchanged."""
+        env = {"HOME": "/root", "SUDO_USER": "ghost", "PATH": "/usr/bin"}
+        with patch("os.environ", env), \
+             patch("pwd.getpwnam", side_effect=KeyError("ghost")):
+            result = _resolve_msmtp_env()
+        assert result["HOME"] == "/root"
+

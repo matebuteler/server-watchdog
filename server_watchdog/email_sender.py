@@ -1,6 +1,8 @@
 """Email delivery for server-watchdog reports and alerts."""
 
 import logging
+import os
+import pwd
 import smtplib
 import ssl
 import subprocess
@@ -102,6 +104,41 @@ def _send_email_smtp(config, subject, body_text, body_html=None):
         raise
 
 
+def _resolve_msmtp_env():
+    """Return an environment dict for the msmtp subprocess.
+
+    When server-watchdog runs under ``sudo``, the process ``HOME`` is set to
+    ``/root``, which causes msmtp to report "no configuration file available"
+    because it cannot find the invoking user's ``~/.msmtprc``.
+
+    This function detects ``SUDO_USER`` and rewrites ``HOME`` to that user's
+    actual home directory so msmtp locates its config file transparently.
+
+    Returns
+    -------
+    dict
+        A copy of the current environment with ``HOME`` (and ``USER``) corrected
+        to the sudo-invoking user when applicable.
+    """
+    env = os.environ.copy()
+    sudo_user = env.get("SUDO_USER")
+    if sudo_user:
+        try:
+            pw = pwd.getpwnam(sudo_user)
+            env["HOME"] = pw.pw_dir
+            env["USER"] = sudo_user
+            logger.debug(
+                "msmtp: running under sudo as %s; setting HOME=%s",
+                sudo_user, pw.pw_dir,
+            )
+        except KeyError:
+            logger.warning(
+                "msmtp: SUDO_USER=%s not found in passwd; HOME unchanged.",
+                sudo_user,
+            )
+    return env
+
+
 def _send_email_msmtp(config, subject, body_text, body_html=None):
     """Send an email by piping through the ``msmtp`` command-line tool.
 
@@ -113,6 +150,12 @@ def _send_email_msmtp(config, subject, body_text, body_html=None):
     the ``From:`` header) and ``--read-recipients`` (reads ``To:``/``Cc:``
     headers).  An optional account name can be specified via the
     ``msmtp_account`` config key (maps to ``msmtp -a <account>``).
+
+    An optional ``msmtp_config_file`` key may be set to an explicit path
+    to the msmtprc file (useful when the file is not in the default location).
+
+    When invoked via ``sudo``, ``HOME`` is restored to the invoking user's
+    home directory automatically via :func:`_resolve_msmtp_env`.
     """
     msg, full_subject, from_addr, to_addr = _build_message(
         config, subject, body_text, body_html
@@ -120,10 +163,15 @@ def _send_email_msmtp(config, subject, body_text, body_html=None):
 
     msmtp_bin = config.get("email", "msmtp_bin", fallback="msmtp")
     msmtp_account = config.get("email", "msmtp_account", fallback="")
+    msmtp_config_file = config.get("email", "msmtp_config_file", fallback="")
 
     cmd = [msmtp_bin, "--read-envelope-from", "--read-recipients"]
     if msmtp_account:
         cmd.extend(["-a", msmtp_account])
+    if msmtp_config_file:
+        cmd.extend(["--file", msmtp_config_file])
+
+    env = _resolve_msmtp_env()
 
     try:
         proc = subprocess.run(
@@ -132,6 +180,7 @@ def _send_email_msmtp(config, subject, body_text, body_html=None):
             capture_output=True,
             text=True,
             timeout=120,
+            env=env,
         )
         if proc.returncode != 0:
             error_msg = proc.stderr.strip() or f"msmtp exited with code {proc.returncode}"
@@ -149,4 +198,3 @@ def _send_email_msmtp(config, subject, body_text, body_html=None):
     except subprocess.TimeoutExpired:
         logger.error("msmtp timed out after 120 seconds.")
         raise RuntimeError("msmtp timed out after 120 seconds.") from None
-

@@ -47,6 +47,12 @@ password  =
 msmtp_account =
 # Path to the msmtp binary (if not in PATH)
 msmtp_bin = msmtp
+# Explicit path to the msmtprc config file.  Leave empty to use the default
+# (~/.msmtprc).  Useful when running via sudo and the config file is not in
+# the root home directory.  Note: server-watchdog automatically detects
+# SUDO_USER and restores the correct HOME so that ~/.msmtprc is found in the
+# invoking user's home directory without needing to set this explicitly.
+msmtp_config_file =
 
 # Prefix prepended to every email subject
 subject_prefix = [server-watchdog]

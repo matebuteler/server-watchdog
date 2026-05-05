@@ -36,6 +36,7 @@ class Config:
                 "backend": "smtp",
                 "msmtp_account": "",
                 "msmtp_bin": "msmtp",
+                "msmtp_config_file": "",
             },
             "llm": {
                 "provider": "gemini",

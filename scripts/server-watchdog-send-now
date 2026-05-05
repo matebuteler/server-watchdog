@@ -184,8 +184,80 @@ def main():
         send_email(config, subject, plain, html)
         print("✓ Email sent successfully.", flush=True)
     except Exception as exc:  # pylint: disable=broad-except
-        print(f"ERROR: Failed to send email: {exc}", file=sys.stderr)
+        print(f"WARNING: Failed to send email: {exc}", file=sys.stderr)
+        print("  Saving report locally as fallback…", file=sys.stderr)
+        _save_and_open_report(html, subject)
         sys.exit(1)
+
+
+def _save_and_open_report(html, subject):
+    """Save *html* to a temp file and open it in a browser as a fallback.
+
+    Tries ``xdg-open`` first (Linux desktop), then ``$BROWSER``.
+    The file is saved to ``/tmp/server-watchdog-report-<timestamp>.html``
+    and its path is printed so the user can open it manually if needed.
+    """
+    import tempfile  # pylint: disable=import-outside-toplevel
+    import shutil    # pylint: disable=import-outside-toplevel
+    from datetime import datetime  # pylint: disable=import-outside-toplevel
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_path = f"/tmp/server-watchdog-report-{timestamp}.html"
+
+    try:
+        with open(report_path, "w", encoding="utf-8") as fh:
+            fh.write(html)
+        # Make readable by the invoking (non-root) user
+        sudo_user = os.environ.get("SUDO_USER")
+        if sudo_user:
+            import pwd  # pylint: disable=import-outside-toplevel
+            try:
+                pw = pwd.getpwnam(sudo_user)
+                os.chown(report_path, pw.pw_uid, pw.pw_gid)
+            except (KeyError, OSError):
+                pass
+        print(f"  Report saved to: {report_path}", file=sys.stderr)
+    except OSError as write_exc:
+        print(f"  Could not write report file: {write_exc}", file=sys.stderr)
+        return
+
+    # Determine which display/user to open the browser as
+    sudo_user = os.environ.get("SUDO_USER")
+    env = os.environ.copy()
+    if sudo_user:
+        try:
+            import pwd  # pylint: disable=import-outside-toplevel
+            pw = pwd.getpwnam(sudo_user)
+            env["HOME"] = pw.pw_dir
+            env["USER"] = sudo_user
+            # Restore DISPLAY / WAYLAND_DISPLAY from the invoking user's session
+            # (these are typically preserved by sudo on desktop systems)
+        except KeyError:
+            pass
+
+    opener = shutil.which("xdg-open") or os.environ.get("BROWSER")
+    if opener:
+        try:
+            if sudo_user:
+                # Run xdg-open as the non-root user so the desktop session opens it
+                subprocess.Popen(
+                    ["sudo", "-u", sudo_user, opener, report_path],
+                    env=env,
+                )
+            else:
+                subprocess.Popen([opener, report_path], env=env)
+            print(f"  Opened in browser via {opener}.", file=sys.stderr)
+        except OSError as open_exc:
+            print(
+                f"  Could not open browser ({open_exc}). "
+                f"Open manually: {report_path}",
+                file=sys.stderr,
+            )
+    else:
+        print(
+            f"  No browser found. Open manually: {report_path}",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":
