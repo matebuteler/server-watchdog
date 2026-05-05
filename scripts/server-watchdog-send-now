@@ -4,6 +4,7 @@
 Usage
 -----
     sudo server-watchdog-send-now            # uses /etc/server-watchdog/config.ini
+    sudo server-watchdog-send-now --no-fallback   # wait instead of model fallback
     sudo WATCHDOG_CONFIG=/path/to/config.ini server-watchdog-send-now
 
 The email contains two sections:
@@ -14,6 +15,7 @@ The email contains two sections:
      (package updates, failed services, storage usage, journal errors).
 """
 
+import argparse
 import sys
 
 from server_watchdog.avc_monitor import read_current_avc_denials, _build_alert_html, _markdown_to_html
@@ -22,7 +24,7 @@ from server_watchdog.email_sender import send_email
 from server_watchdog.llm import analyse_avc_denials
 from server_watchdog.logging_setup import setup_logging
 from server_watchdog.maintenance import build_report
-from server_watchdog.utils import escape_html, get_hostname
+from server_watchdog.utils import detect_mac_system, escape_html, get_hostname
 
 
 def _avc_section_text(denials, analysis, lookback):
@@ -107,11 +109,26 @@ def _wrap_html(body):
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Send an on-demand server-watchdog email."
+    )
+    parser.add_argument(
+        "--no-fallback",
+        action="store_true",
+        help="Wait for rate limits instead of falling back to a lower model.",
+    )
+    args = parser.parse_args()
+
     config = Config()
     setup_logging(config)
 
+    # Apply --no-fallback override
+    if args.no_fallback:
+        config._parser.set("llm", "no_fallback", "true")
+
     hostname = get_hostname()
     lookback = config.getint("avc_monitor", "avc_lookback_days", fallback=7)
+    mac_system = detect_mac_system()
 
     # ── 0. Startup diagnostics ─────────────────────────────────────────────
     cfg_status = "found" if config.config_file_found else "NOT FOUND – using defaults"
@@ -123,14 +140,19 @@ def main():
             flush=True,
         )
 
+    mac_label = "SELinux AVC" if mac_system == "selinux" else (
+        "AppArmor" if mac_system == "apparmor" else "MAC"
+    )
+    print(f"MAC system: {mac_system} ({mac_label} denials)", flush=True)
+
     # ── 1. AVC denial snapshot ─────────────────────────────────────────────
-    print(f"Reading AVC denials from the last {lookback} days…", flush=True)
+    print(f"Reading {mac_label} denials from the last {lookback} days…", flush=True)
     denials = read_current_avc_denials(config)
-    print(f"  Found {len(denials)} AVC denial(s).", flush=True)
+    print(f"  Found {len(denials)} denial(s).", flush=True)
 
     if denials:
         print("  Requesting LLM analysis…", flush=True)
-        analysis = analyse_avc_denials(config, denials)
+        analysis = analyse_avc_denials(config, denials, mac_system=mac_system)
     else:
         analysis = ""
 
@@ -155,7 +177,7 @@ def main():
                .split("</style>")[-1]
     )
 
-    subject = f"On-demand report: AVC denials + system status – {hostname}"
+    subject = f"On-demand report: {mac_label} denials + system status – {hostname}"
 
     print("Sending email…", flush=True)
     try:

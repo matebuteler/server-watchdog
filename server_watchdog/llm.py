@@ -1,4 +1,7 @@
-"""LLM integration for analysing SELinux AVC denials via Google Gemini."""
+"""LLM integration for analysing SELinux/AppArmor denials via Google Gemini.
+
+Supports cascading model fallback with per-model rate limiting.
+"""
 
 import logging
 
@@ -20,6 +23,29 @@ the issue.  Do NOT recommend `audit2allow` unless it is strictly necessary for a
 custom local application with no existing policy module.
 
 --- RAW AVC DENIALS ---
+{raw_denials}
+--- END ---
+
+Respond in clear, well-structured Markdown.
+"""
+
+APPARMOR_ANALYSIS_PROMPT_TEMPLATE = """\
+You are a Linux security expert specialising in AppArmor profile analysis.
+
+Analyse the following raw AppArmor denial log entries collected on an openSUSE server.
+
+For each **distinct** denial (group near-duplicate messages), provide:
+
+1. **Summary:** A brief, human-readable explanation of what process tried to do \
+what to which target, including the AppArmor profile involved.
+2. **Severity:** One of Low / Medium / High / Critical, based on the context \
+(e.g. an unprivileged process accessing /etc/shadow is Critical).
+3. **Recommended Action:** Step-by-step advice on how to investigate and remediate \
+the issue.  Reference AppArmor tools where appropriate (aa-logprof, aa-enforce, \
+aa-complain, profile editing in /etc/apparmor.d/).  Do NOT recommend disabling \
+AppArmor unless there is no reasonable alternative.
+
+--- RAW APPARMOR DENIALS ---
 {raw_denials}
 --- END ---
 
@@ -87,7 +113,7 @@ Now write the glanceable report:
 """
 
 
-def analyse_avc_denials(config, raw_denials):
+def analyse_avc_denials(config, raw_denials, mac_system="selinux"):
     """Send *raw_denials* to the configured LLM and return the analysis text.
 
     Parameters
@@ -95,7 +121,9 @@ def analyse_avc_denials(config, raw_denials):
     config:
         A :class:`~server_watchdog.config.Config` instance.
     raw_denials:
-        A list of raw AVC denial log strings.
+        A list of raw AVC/AppArmor denial log strings.
+    mac_system:
+        ``"selinux"`` or ``"apparmor"`` — selects the appropriate prompt.
 
     Returns
     -------
@@ -105,16 +133,23 @@ def analyse_avc_denials(config, raw_denials):
     """
     provider = config.get("llm", "provider", fallback="gemini").lower()
     api_key = config.get("llm", "api_key", fallback="")
-    model_name = config.get("llm", "model", fallback="gemini-1.5-pro")
+    model_name = config.get("llm", "model", fallback="gemini-3-flash-preview")
 
     if not api_key:
         logger.warning("LLM API key is not configured; skipping analysis.")
         return "(LLM analysis unavailable: no API key configured.)"
 
-    prompt = ANALYSIS_PROMPT_TEMPLATE.format(raw_denials="\n".join(raw_denials))
+    if mac_system == "apparmor":
+        prompt = APPARMOR_ANALYSIS_PROMPT_TEMPLATE.format(
+            raw_denials="\n".join(raw_denials)
+        )
+    else:
+        prompt = ANALYSIS_PROMPT_TEMPLATE.format(
+            raw_denials="\n".join(raw_denials)
+        )
 
     if provider == "gemini":
-        return _call_gemini(api_key, model_name, prompt)
+        return _call_gemini(config, api_key, model_name, prompt)
 
     logger.error("Unknown LLM provider: %s", provider)
     return f"(LLM analysis unavailable: unknown provider '{provider}'.)"
@@ -139,7 +174,7 @@ def analyse_maintenance_report(config, raw):
     """
     provider = config.get("llm", "provider", fallback="gemini").lower()
     api_key = config.get("llm", "api_key", fallback="")
-    model_name = config.get("llm", "model", fallback="gemini-1.5-pro")
+    model_name = config.get("llm", "model", fallback="gemini-3-flash-preview")
 
     if not api_key:
         logger.warning("LLM API key is not configured; skipping maintenance analysis.")
@@ -148,7 +183,7 @@ def analyse_maintenance_report(config, raw):
     prompt = _build_maintenance_prompt(raw)
 
     if provider == "gemini":
-        return _call_gemini(api_key, model_name, prompt)
+        return _call_gemini(config, api_key, model_name, prompt)
 
     logger.error("Unknown LLM provider: %s", provider)
     return f"(LLM analysis unavailable: unknown provider '{provider}'.)"
@@ -268,20 +303,255 @@ def _build_maintenance_prompt(raw):
     )
 
 
-def _call_gemini(api_key, model_name, prompt):
-    """Call the Google Gemini API and return the response text."""
+def _call_gemini(config, api_key, model_name, prompt):
+    """Call the Google Gemini API with rate limiting and cascading fallback.
+
+    Parameters
+    ----------
+    config:
+        A :class:`~server_watchdog.config.Config` instance (used to read
+        rate-limiting settings).
+    api_key:
+        The Gemini API key.
+    model_name:
+        The requested model codename.
+    prompt:
+        The prompt text to send.
+    """
     try:
         from google import genai  # pylint: disable=import-outside-toplevel
+        from google.genai import types as genai_types  # pylint: disable=import-outside-toplevel
+        from .rate_limiter import RateLimiter, estimate_tokens  # pylint: disable=import-outside-toplevel
+    except ImportError as exc:
+        if "genai" in str(exc):
+            logger.error(
+                "google-genai package is not installed. "
+                "Install it with: pip install google-genai"
+            )
+            return "(LLM analysis unavailable: google-genai not installed.)"
+        raise
 
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(model=model_name, contents=prompt)
-        return response.text
-    except ImportError:
-        logger.error(
-            "google-genai package is not installed. "
-            "Install it with: pip install google-genai"
+    # ── Set up rate limiter ────────────────────────────────────────────────
+    no_fallback = config.getboolean("llm", "no_fallback", fallback=False)
+    state_path = config.get("llm", "rate_limit_state", fallback="") or None
+    chain_str = config.get(
+        "llm", "fallback_chain",
+        fallback="gemma-4-31b-it,gemini-3.1-flash-lite-preview",
+    )
+    fallback_chain = [model_name] + [
+        m.strip() for m in chain_str.split(",") if m.strip()
+    ]
+    # Deduplicate while preserving order
+    seen = set()
+    unique_chain = []
+    for m in fallback_chain:
+        if m not in seen:
+            seen.add(m)
+            unique_chain.append(m)
+    fallback_chain = unique_chain
+
+    limiter = RateLimiter(
+        state_path=state_path,
+        no_fallback=no_fallback,
+        fallback_chain=fallback_chain,
+    )
+
+    # ── Estimate tokens and pick the model ─────────────────────────────────
+    est_prompt_tokens = estimate_tokens(prompt)
+    # Assume response will be roughly 1/3 of prompt size
+    est_response_tokens = max(200, est_prompt_tokens // 3)
+    est_total = est_prompt_tokens + est_response_tokens
+
+    actual_model = limiter.check_and_wait(est_total, model_name)
+    if actual_model != model_name:
+        logger.warning(
+            "⚠️  Using fallback model %s instead of %s (rate limit reached). "
+            "Response quality may be reduced.",
+            actual_model, model_name,
         )
-        return "(LLM analysis unavailable: google-genai not installed.)"
+
+    # ── Search grounding pipeline (optional) ─────────────────────────────────
+    # 3-step pipeline for maximum quality:
+    #   1. Primary model → initial ungrounded analysis
+    #   2. Search model (G2.5F) + grounding → enrich with real-time data
+    #   3. Primary model → final grounded analysis
+    # Uses 2x primary + 1x search calls.  Disable with search_grounding = false.
+    search_grounding = config.getboolean("llm", "search_grounding", fallback=True)
+    search_model = config.get(
+        "llm", "search_grounding_model", fallback="gemini-2.5-flash"
+    )
+
+    if search_grounding:
+        return _grounded_pipeline(
+            api_key, actual_model, search_model, prompt,
+            genai, genai_types, limiter, est_prompt_tokens,
+        )
+
+    # ── Simple (ungrounded) call ───────────────────────────────────────────
+    return _simple_call(
+        api_key, actual_model, prompt, genai, limiter, est_prompt_tokens,
+    )
+
+
+def _simple_call(api_key, model, prompt, genai, limiter, est_prompt_tokens):
+    """Single-shot LLM call without search grounding."""
+    from .rate_limiter import estimate_tokens  # pylint: disable=import-outside-toplevel
+
+    try:
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(model=model, contents=prompt)
+        response_text = response.text
+
+        resp_tokens = estimate_tokens(response_text) if response_text else 0
+        limiter.record_usage(model, est_prompt_tokens, resp_tokens)
+
+        return response_text
     except Exception as exc:  # pylint: disable=broad-except
-        logger.error("Gemini API call failed: %s", exc)
+        logger.error("Gemini API call failed (model=%s): %s", model, exc)
         return f"(LLM analysis failed: {exc})"
+
+
+# ---------------------------------------------------------------------------
+# 3-step search grounding pipeline
+# ---------------------------------------------------------------------------
+
+_GROUNDING_PROMPT = """\
+You are a research assistant.  The following is a system administration analysis \
+produced by an AI.  Search the internet for relevant and recent information that \
+can validate, correct, or enrich this analysis.  Focus on:
+
+- Known CVEs or security advisories for the packages, services, or policy \
+modules mentioned
+- Known bugs or regressions in the specific software versions
+- Official best-practice recommendations or workarounds
+
+Return ONLY the relevant facts you found, as concise bullet points with source \
+URLs where available.  Do NOT rewrite the analysis — just provide supporting data.
+
+--- INITIAL ANALYSIS ---
+{initial_analysis}
+--- END ---
+"""
+
+_REFINEMENT_PROMPT = """\
+You previously produced the following analysis.  We have now retrieved real-time \
+data from the internet to validate and enrich it.  Please produce your FINAL \
+analysis by incorporating the grounded context below.  Reference specific CVEs, \
+advisories, or known issues where the data supports it.  If the grounded context \
+contradicts your initial analysis, correct it.
+
+--- YOUR INITIAL ANALYSIS ---
+{initial_analysis}
+--- END INITIAL ANALYSIS ---
+
+--- REAL-TIME GROUNDED CONTEXT ---
+{grounded_context}
+--- END GROUNDED CONTEXT ---
+
+--- ORIGINAL REQUEST ---
+{original_prompt}
+--- END ORIGINAL REQUEST ---
+
+Now produce the refined, grounded analysis:
+"""
+
+
+def _grounded_pipeline(api_key, primary_model, search_model, prompt,
+                       genai, genai_types, limiter, est_prompt_tokens):
+    """3-step grounded analysis pipeline.
+
+    1. Primary model → initial analysis (ungrounded).
+    2. Search model + Google Search tool → real-time context.
+    3. Primary model → final analysis incorporating grounded context.
+
+    Falls back to a simple ungrounded call if any grounding step fails.
+    """
+    from .rate_limiter import estimate_tokens  # pylint: disable=import-outside-toplevel
+
+    client = genai.Client(api_key=api_key)
+
+    # ── Step 1: Initial analysis ───────────────────────────────────────────
+    logger.info("Grounding pipeline step 1/3: initial analysis via %s…", primary_model)
+    try:
+        resp1 = client.models.generate_content(model=primary_model, contents=prompt)
+        initial_analysis = resp1.text or ""
+        resp1_tokens = estimate_tokens(initial_analysis)
+        limiter.record_usage(primary_model, est_prompt_tokens, resp1_tokens)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("Grounding step 1 failed (model=%s): %s", primary_model, exc)
+        return f"(LLM analysis failed: {exc})"
+
+    if not initial_analysis.strip():
+        return initial_analysis
+
+    # ── Step 2: Search grounding ───────────────────────────────────────────
+    logger.info("Grounding pipeline step 2/3: search grounding via %s…", search_model)
+    grounding_prompt = _GROUNDING_PROMPT.format(
+        initial_analysis=initial_analysis[:3000]
+    )
+    grounded_context = ""
+    try:
+        est_search_tokens = estimate_tokens(grounding_prompt) + 500
+        actual_search_model = limiter.check_and_wait(est_search_tokens, search_model)
+
+        grounding_tool = genai_types.Tool(
+            google_search=genai_types.GoogleSearch()
+        )
+        search_config = genai_types.GenerateContentConfig(
+            tools=[grounding_tool]
+        )
+        resp2 = client.models.generate_content(
+            model=actual_search_model,
+            contents=grounding_prompt,
+            config=search_config,
+        )
+        grounded_context = resp2.text or ""
+        resp2_tokens = estimate_tokens(grounded_context)
+        limiter.record_usage(
+            actual_search_model, estimate_tokens(grounding_prompt), resp2_tokens
+        )
+        logger.info(
+            "Search grounding: fetched %d chars of context.", len(grounded_context)
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "Grounding step 2 failed (non-fatal, returning ungrounded result): %s",
+            exc,
+        )
+        return initial_analysis  # graceful degradation
+
+    if not grounded_context.strip():
+        logger.info("Search grounding returned no context; using ungrounded result.")
+        return initial_analysis
+
+    # ── Step 3: Refined analysis ───────────────────────────────────────────
+    logger.info("Grounding pipeline step 3/3: refined analysis via %s…", primary_model)
+    refinement_prompt = _REFINEMENT_PROMPT.format(
+        initial_analysis=initial_analysis,
+        grounded_context=grounded_context,
+        original_prompt=prompt[:2000],
+    )
+    try:
+        est_refine_tokens = estimate_tokens(refinement_prompt)
+        actual_refine_model = limiter.check_and_wait(
+            est_refine_tokens + 500, primary_model
+        )
+        if actual_refine_model != primary_model:
+            logger.warning(
+                "⚠️  Refinement step using fallback model %s (rate limit on %s).",
+                actual_refine_model, primary_model,
+            )
+
+        resp3 = client.models.generate_content(
+            model=actual_refine_model, contents=refinement_prompt
+        )
+        final_text = resp3.text or initial_analysis
+        resp3_tokens = estimate_tokens(final_text)
+        limiter.record_usage(actual_refine_model, est_refine_tokens, resp3_tokens)
+
+        return final_text
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "Grounding step 3 failed (returning ungrounded result): %s", exc
+        )
+        return initial_analysis

@@ -6,7 +6,7 @@ Wants=auditd.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/server-watchdog-avc-monitor
+ExecStart=/usr/bin/server-watchdog-avc-monitor
 Restart=on-failure
 RestartSec=10s
 

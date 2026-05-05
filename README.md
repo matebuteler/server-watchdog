@@ -1,14 +1,15 @@
 # server-watchdog
 
-A lightweight daemon for RHEL 8 that provides:
+A lightweight daemon for RHEL 8+ and openSUSE that provides:
 
-1. **Monthly maintenance reports** – checks available package updates, failed
-   systemd services, recent journal errors, and filesystem storage usage; then
-   mails a comprehensive summary to the configured administrator.
+1. **Monthly maintenance reports** – checks available package updates (dnf/zypper),
+   failed systemd services, recent journal errors, and filesystem storage usage;
+   then mails a comprehensive summary to the configured administrator.
 
-2. **Real-time SELinux AVC denial alerts** – monitors the system journal for
-   `avc: denied` messages, passes the raw denials through a Gemini LLM
-   pipeline for human-readable analysis, and sends an immediate email alert.
+2. **Real-time MAC denial alerts** – monitors the system journal for
+   SELinux `avc: denied` messages (RHEL) or AppArmor `DENIED` events (openSUSE),
+   passes the raw denials through a Gemini LLM pipeline with search grounding
+   for human-readable analysis, and sends an immediate email alert.
 
 ---
 
@@ -16,10 +17,10 @@ A lightweight daemon for RHEL 8 that provides:
 
 | Requirement | Notes |
 |-------------|-------|
-| RHEL 8 / CentOS 8 | systemd, journald, auditd |
-| Python ≥ 3.10 | Usually pre-installed on RHEL 8+ |
-| `dnf`, `systemctl`, `journalctl` | Standard RHEL tools |
-| SMTP server | Local MTA (e.g. Postfix) or external SMTP |
+| RHEL 8+ / CentOS / openSUSE | systemd, journald |
+| Python ≥ 3.10 | Usually pre-installed |
+| `dnf` or `zypper`, `systemctl`, `journalctl` | Standard distro tools |
+| SMTP server **or** msmtp | Local MTA, external SMTP, or personal `~/.msmtprc` |
 | Google Gemini API key | [Get one free](https://aistudio.google.com/app/apikey) |
 
 ---
@@ -31,12 +32,13 @@ sudo bash install.sh
 ```
 
 The script will:
-1. Create a Python virtual environment in `/opt/server-watchdog/venv`.
-2. Install Python dependencies (`google-genai`) into the venv.
-3. Install the package into the venv via `pip`.
-4. Symlink the entry-point scripts from the venv into `/usr/bin/`.
-5. Create `/etc/server-watchdog/config.ini` from the example file.
-6. Install and enable the systemd units.
+1. Auto-detect your distribution (RHEL, openSUSE, etc.).
+2. Create a Python virtual environment in `/opt/server-watchdog/venv`.
+3. Install Python dependencies (`google-genai`) into the venv.
+4. Install the package into the venv via `pip`.
+5. Symlink the entry-point scripts from the venv into `/usr/bin/`.
+6. Create `/etc/server-watchdog/config.ini` from the example file.
+7. Install and enable the systemd units.
 
 After installation, **edit `/etc/server-watchdog/config.ini`** and fill in your
 email settings and Gemini API key.
@@ -79,13 +81,7 @@ to_addr   = admin@example.com
 
 [llm]
 api_key = YOUR_GEMINI_API_KEY_HERE
-model   = gemini-1.5-pro
-
-[maintenance]
-storage_threshold = 80   # warn when ≥ 80 % full
-
-[avc_monitor]
-batch_interval = 60      # seconds to collect denials before sending alert
+model   = gemini-3-flash-preview
 ```
 
 The full list of options with documentation is in `config.ini.example`.
@@ -98,6 +94,37 @@ the **From:** header of every email (e.g. `watchdog@mydomain.org`):
 ```ini
 [email]
 from_addr = watchdog@mydomain.org
+```
+
+### Using msmtp (personal workspace accounts)
+
+If you already have a working `~/.msmtprc` (e.g. Gmail with App Passwords),
+you can reuse it instead of configuring SMTP in `config.ini`:
+
+```ini
+[email]
+backend       = msmtp
+to_addr       = admin@example.com
+from_addr     = your@gmail.com
+msmtp_account = gmail
+```
+
+Example `~/.msmtprc` for Gmail:
+```
+defaults
+auth           on
+tls            on
+tls_trust_file /etc/pki/tls/certs/ca-bundle.crt
+logfile        ~/.msmtp.log
+
+account        gmail
+host           smtp.gmail.com
+port           587
+from           your@gmail.com
+user           your@gmail.com
+password       your-app-password
+
+account default : gmail
 ```
 
 ### Using a Gmail SMTP relay (port 587 / STARTTLS)
@@ -120,13 +147,40 @@ use_starttls = true
 > automatically.  Only set `use_starttls = true` when connecting *directly* to
 > an external SMTP server on port 587.
 
+### Rate limiting and model fallback
+
+The Gemini free tier has strict rate limits.  server-watchdog tracks usage
+per model and cascades through a fallback chain when limits are hit:
+
+| Priority | Model | Intelligence (AAII) | RPM | RPD |
+|----------|-------|---------------------|-----|-----|
+| Primary | `gemini-3-flash-preview` | 46 | 5 | 20 |
+| Fallback 1 | `gemma-4-31b-it` | 39 | 15 | 1,500 |
+| Fallback 2 | `gemini-3.1-flash-lite-preview` | 34 | 15 | 500 |
+
+Use `--no-fallback` on the CLI to wait instead of falling back:
+
+```bash
+sudo server-watchdog-send-now --no-fallback
+```
+
+### Search grounding (3-step pipeline)
+
+When `search_grounding = true` (default), analysis uses a 3-step pipeline:
+1. Primary model produces initial analysis.
+2. `gemini-2.5-flash` validates/enriches it via Google Search (CVEs, advisories).
+3. Primary model refines the analysis with grounded real-time context.
+
+This doubles primary model usage (~10 analyses/day at 20 RPD).
+Set `search_grounding = false` to disable and conserve rate budget.
+
 ---
 
 ## Systemd services
 
 | Unit | Purpose |
 |------|---------|
-| `server-watchdog-avc.service` | Long-running AVC monitor daemon |
+| `server-watchdog-avc.service` | Long-running denial monitor daemon |
 | `server-watchdog-monthly.service` | One-shot maintenance report |
 | `server-watchdog-monthly.timer` | Triggers the service on the 1st of each month |
 
@@ -145,7 +199,7 @@ systemctl start server-watchdog-monthly.service
 
 ## On-demand report
 
-To send a single email **right now** containing all recent AVC denials and the
+To send a single email **right now** containing all recent denials and the
 current system status, run:
 
 ```bash
@@ -154,16 +208,17 @@ sudo server-watchdog-send-now
 
 The command will:
 
-1. Read all `avc: denied` messages from the last `avc_lookback_days` days of
-   the systemd journal (default: 7 days).
-2. Pass them to the configured LLM for analysis (if an API key is set).
+1. Read all `avc: denied` (SELinux) or `apparmor="DENIED"` (AppArmor)
+   messages from the last `avc_lookback_days` days of the systemd journal
+   (default: 7 days).
+2. Pass them to the configured LLM for analysis (with search grounding
+   if enabled).
 3. Run the full system-status check (same as the monthly report: package
    updates, failed services, storage, journal errors).
 4. Send a single email combining both sections to the configured recipient.
 
-This is useful for verifying your email and LLM configuration and for
-checking what the current state of the system looks like without waiting
-for a scheduled run.
+Options:
+- `--no-fallback`: Wait for rate limits instead of cascading to lower models.
 
 > **Tip:** The lookback window is controlled by `avc_lookback_days` in the
 > `[avc_monitor]` section of `config.ini`.
@@ -186,15 +241,17 @@ pytest
 ```
 server_watchdog/
 ├── config.py          – INI configuration loader
-├── email_sender.py    – SMTP email helper
-├── llm.py             – Gemini LLM integration (AVC analysis)
-├── maintenance.py     – Monthly system checks and report builder
-├── avc_monitor.py     – Real-time AVC denial watcher (daemon) + snapshot reader
+├── email_sender.py    – SMTP / msmtp email helper
+├── llm.py             – Gemini LLM integration (analysis + search grounding)
+├── rate_limiter.py    – Per-model rate limiting with cascading fallback
+├── maintenance.py     – Monthly system checks and report builder (dnf/zypper)
+├── avc_monitor.py     – Real-time denial watcher (SELinux + AppArmor)
+├── utils.py           – Shared helpers (distro detection, MAC detection, etc.)
 └── logging_setup.py   – Shared logging configuration
 
 scripts/
 ├── server-watchdog-monthly       – Entry point for monthly report
-├── server-watchdog-avc-monitor   – Entry point for AVC daemon
+├── server-watchdog-avc-monitor   – Entry point for denial daemon
 └── server-watchdog-send-now      – Entry point for on-demand email
 
 systemd/
@@ -203,20 +260,44 @@ systemd/
 └── server-watchdog-monthly.timer
 ```
 
-### AVC alert flow
+### Analysis pipeline (with search grounding)
 
 ```
-journalctl -f ──► AVCMonitor._enqueue()
-                      │
-                      ▼  (batch_interval seconds)
-               AVCMonitor._flush()
-                      │
-              ┌───────┴──────────┐
-              ▼                  ▼
+ Raw denials / maintenance data
+         │
+         ▼
+ ┌──────────────────────┐
+ │  Step 1: G3 Flash    │  Initial analysis (ungrounded)
+ │  (AAII 46, primary)  │
+ └──────────┬───────────┘
+            ▼
+ ┌──────────────────────┐
+ │  Step 2: G2.5 Flash  │  Search grounding via Google Search
+ │  + Google Search     │  (CVEs, advisories, known issues)
+ └──────────┬───────────┘
+            ▼
+ ┌──────────────────────┐
+ │  Step 3: G3 Flash    │  Refined analysis with grounded context
+ │  (AAII 46, primary)  │
+ └──────────┬───────────┘
+            ▼
+       send_email()
+```
+
+### Denial alert flow
+
+```
+journalctl -f ──► _is_mac_denial()
+                       │
+                       ▼  (batch_interval seconds)
+                AVCMonitor._flush()
+                       │
+               ┌───────┴──────────┐
+               ▼                  ▼
       analyse_avc_denials()   (raw denials)
-      (Gemini LLM)                │
-              │                  │
-              └────────┬─────────┘
-                       ▼
-                  send_email()
+      (3-step pipeline)           │
+               │                  │
+               └────────┬─────────┘
+                        ▼
+                   send_email()
 ```

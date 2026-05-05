@@ -1,4 +1,10 @@
 [email]
+# ── Email backend ─────────────────────────────────────────────────────────────
+# Choose "smtp" (default, built-in Python smtplib) or "msmtp" (pipe through
+# the msmtp command-line tool, reusing your ~/.msmtprc configuration).
+backend = smtp
+
+# ── SMTP backend settings (used when backend = smtp) ─────────────────────────
 # SMTP server address (default: localhost for a local MTA like Postfix)
 smtp_host = localhost
 smtp_port = 25
@@ -13,16 +19,75 @@ use_starttls = false
 # Leave empty if no SMTP authentication is required
 username  =
 password  =
+
+# ── msmtp backend settings (used when backend = msmtp) ───────────────────────
+# The msmtp backend pipes emails through the msmtp command-line tool, which
+# reads its configuration from ~/.msmtprc.  This is ideal for personal
+# workspace accounts (e.g. Gmail with App Passwords).
+#
+# Example ~/.msmtprc for Gmail:
+#   defaults
+#   auth           on
+#   tls            on
+#   tls_trust_file /etc/pki/tls/certs/ca-bundle.crt  # RHEL/CentOS
+#   # tls_trust_file /etc/ssl/certs/ca-certificates.crt  # Debian/Ubuntu/openSUSE
+#   logfile        ~/.msmtp.log
+#
+#   account        gmail
+#   host           smtp.gmail.com
+#   port           587
+#   from           user@gmail.com
+#   user           user@gmail.com
+#   password       your-app-password
+#
+#   account default : gmail
+#
+# Optional: specify which msmtp account to use (maps to `msmtp -a <account>`)
+msmtp_account =
+# Path to the msmtp binary (if not in PATH)
+msmtp_bin = msmtp
+
 # Prefix prepended to every email subject
 subject_prefix = [server-watchdog]
 
 [llm]
-# LLM provider for AVC denial analysis.  Currently supported: "gemini"
+# LLM provider for denial analysis.  Currently supported: "gemini"
 provider  = gemini
 # Your Google Gemini API key (https://aistudio.google.com/app/apikey)
 api_key   = YOUR_GEMINI_API_KEY_HERE
-# Model name – see https://ai.google.dev/models/gemini for available models
-model     = gemini-1.5-pro
+# Model name – the primary model used for analysis.
+# Available models (ranked by intelligence, AAII score):
+#   gemini-3-flash-preview         (AAII 46, 5 RPM / 250K TPM / 20 RPD)
+#   gemma-4-31b-it                 (AAII 39, 15 RPM / unlimited TPM / 1.5K RPD)
+#   gemini-3.1-flash-lite-preview  (AAII 34, 15 RPM / 250K TPM / 500 RPD)
+model     = gemini-3-flash-preview
+
+# ── Rate limiting & fallback ─────────────────────────────────────────────────
+# When the primary model hits its free-tier rate limit, server-watchdog
+# cascades to the next model in the fallback chain (lower intelligence but
+# higher capacity).  Set no_fallback = true to instead wait for the primary
+# model's rate window to pass (slower, but keeps maximum quality).
+no_fallback = false
+# Comma-separated fallback chain (in priority order, highest intelligence first).
+# The primary model is always tried first; these are the fallbacks.
+fallback_chain = gemma-4-31b-it,gemini-3.1-flash-lite-preview
+# Path to the JSON state file for rate-limit tracking.  Leave empty for auto-
+# detection (/var/lib/server-watchdog/ if writable, else ~/.local/share/server-watchdog/).
+rate_limit_state =
+
+# ── Search grounding (3-step pipeline) ───────────────────────────────────
+# When enabled, analysis uses a 3-step pipeline for maximum quality:
+#   1. Primary model produces initial analysis (ungrounded)
+#   2. Search model (gemini-2.5-flash) validates/enriches via Google Search
+#   3. Primary model refines the analysis with grounded context
+# This uses 2x primary + 1x search model calls per analysis (~10/day at 20 RPD).
+# Disable to save rate limit budget (single call, no internet context).
+search_grounding = true
+# Model used for the search grounding step (must support Google Search tool).
+# gemini-2.5-flash has a 1.5K daily search grounding limit (AAII 31).
+# Alternative: gemma-4-31b-it also has 1.5K search grounding and higher
+# intelligence (AAII 39), but shares rate budget with the fallback chain.
+search_grounding_model = gemini-2.5-flash
 
 [maintenance]
 # Monthly check flags (true/false)
@@ -37,11 +102,12 @@ log_lookback_days = 30
 coredump_age_days = 45
 
 [avc_monitor]
-# Seconds to wait after the first AVC denial before flushing the batch.
+# Seconds to wait after the first denial before flushing the batch.
 # Denials that arrive within this window are grouped into a single email.
+# Works for both SELinux AVC denials and AppArmor DENIED events.
 batch_interval = 60
 # How many days of journal history to scan when taking an on-demand snapshot
-# (used by the server-watchdog-test command).
+# (used by the server-watchdog-send-now command).
 avc_lookback_days = 7
 
 [logging]

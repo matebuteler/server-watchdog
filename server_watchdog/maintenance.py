@@ -16,11 +16,25 @@ logger = logging.getLogger(__name__)
 def check_packages():
     """Return a dict with available package updates.
 
+    Auto-detects the package manager: ``zypper`` on openSUSE/SLES,
+    ``dnf`` on RHEL/CentOS/Fedora.
+
     Returns
     -------
     dict
         ``{'updates': [...], 'error': None|str}``
     """
+    import shutil  # pylint: disable=import-outside-toplevel
+
+    if shutil.which("zypper"):
+        return _check_packages_zypper()
+    if shutil.which("dnf"):
+        return _check_packages_dnf()
+    return {"updates": [], "error": "No supported package manager found (need dnf or zypper)"}
+
+
+def _check_packages_dnf():
+    """Check for updates using dnf (RHEL/CentOS/Fedora)."""
     try:
         result = subprocess.run(
             ["dnf", "check-update", "--quiet"],
@@ -41,6 +55,37 @@ def check_packages():
         return {"updates": [], "error": "dnf not found"}
     except subprocess.TimeoutExpired:
         return {"updates": [], "error": "dnf check-update timed out"}
+
+
+def _check_packages_zypper():
+    """Check for updates using zypper (openSUSE/SLES)."""
+    try:
+        result = subprocess.run(
+            ["zypper", "--non-interactive", "list-updates"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        # zypper exit code: 0 = ok (may have updates listed), 6 = no repos
+        if result.returncode not in (0, 100, 106):
+            stderr = result.stderr.strip()
+            if result.returncode != 0 and stderr:
+                return {"updates": [], "error": stderr}
+
+        lines = []
+        in_table = False
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("---") or stripped.startswith("==="):
+                in_table = True
+                continue
+            if in_table and stripped and not stripped.startswith("S "):
+                lines.append(stripped)
+        return {"updates": lines, "error": None}
+    except FileNotFoundError:
+        return {"updates": [], "error": "zypper not found"}
+    except subprocess.TimeoutExpired:
+        return {"updates": [], "error": "zypper list-updates timed out"}
 
 
 def check_failed_services():
@@ -336,7 +381,7 @@ def build_report(config):
     api_key = config.get("llm", "api_key", fallback="")
     if api_key:
         provider = config.get("llm", "provider", fallback="gemini")
-        model = config.get("llm", "model", fallback="gemini-1.5-pro")
+        model = config.get("llm", "model", fallback="gemini-3-flash-preview")
         print(
             f"  LLM maintenance analysis: provider={provider}, model={model}, "
             f"key=<configured>",

@@ -5,7 +5,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/server-watchdog-monthly
+ExecStart=/usr/bin/server-watchdog-monthly
 
 # Logging
 StandardOutput=journal

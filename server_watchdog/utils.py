@@ -80,3 +80,59 @@ def get_uid_map():
     except OSError:
         pass
     return uid_map
+
+
+def detect_distro():
+    """Detect the Linux distribution by reading ``/etc/os-release``.
+
+    Returns
+    -------
+    str
+        A lowercase distribution identifier such as ``"rhel"``, ``"centos"``,
+        ``"fedora"``, ``"opensuse-leap"``, ``"opensuse-tumbleweed"``, ``"sles"``,
+        ``"debian"``, ``"ubuntu"``, or ``"unknown"``.
+    """
+    try:
+        with open("/etc/os-release", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("ID="):
+                    value = line[3:].strip('"').strip("'").lower()
+                    return value
+    except OSError:
+        pass
+    return "unknown"
+
+
+def detect_mac_system():
+    """Detect whether the system uses SELinux or AppArmor.
+
+    Returns
+    -------
+    str
+        ``"selinux"``, ``"apparmor"``, or ``"none"``.
+    """
+    import os  # pylint: disable=import-outside-toplevel
+
+    # Check AppArmor first (openSUSE, Ubuntu, Debian)
+    if os.path.isdir("/sys/kernel/security/apparmor"):
+        return "apparmor"
+
+    # Check SELinux (RHEL, CentOS, Fedora)
+    if os.path.isfile("/sys/fs/selinux/enforce"):
+        return "selinux"
+
+    # Fallback: try sestatus
+    try:
+        result = subprocess.run(
+            ["sestatus"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if "enabled" in result.stdout.lower():
+            return "selinux"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    return "none"

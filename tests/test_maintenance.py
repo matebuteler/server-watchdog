@@ -39,8 +39,17 @@ def _completed(returncode, stdout="", stderr=""):
 # ---------------------------------------------------------------------------
 
 class TestCheckPackages:
+    def _which_dnf(self, cmd):
+        """Mock shutil.which: only dnf is available."""
+        return "/usr/bin/dnf" if cmd == "dnf" else None
+
+    def _which_zypper(self, cmd):
+        """Mock shutil.which: only zypper is available."""
+        return "/usr/bin/zypper" if cmd == "zypper" else None
+
     def test_no_updates(self):
-        with patch("subprocess.run", return_value=_completed(0, "")):
+        with patch("shutil.which", side_effect=self._which_dnf), \
+             patch("subprocess.run", return_value=_completed(0, "")):
             data = check_packages()
         assert data["error"] is None
         assert data["updates"] == []
@@ -50,26 +59,69 @@ class TestCheckPackages:
             "bash.x86_64                  5.1.8-6.el8  baseos\n"
             "curl.x86_64                  7.61.1-30.el8 baseos\n"
         )
-        with patch("subprocess.run", return_value=_completed(100, dnf_out)):
+        with patch("shutil.which", side_effect=self._which_dnf), \
+             patch("subprocess.run", return_value=_completed(100, dnf_out)):
             data = check_packages()
         assert data["error"] is None
         assert len(data["updates"]) == 2
 
     def test_dnf_not_found(self):
-        with patch("subprocess.run", side_effect=FileNotFoundError):
+        with patch("shutil.which", side_effect=self._which_dnf), \
+             patch("subprocess.run", side_effect=FileNotFoundError):
             data = check_packages()
         assert data["error"] is not None
         assert "dnf not found" in data["error"]
 
     def test_dnf_timeout(self):
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("dnf", 300)):
+        with patch("shutil.which", side_effect=self._which_dnf), \
+             patch("subprocess.run", side_effect=subprocess.TimeoutExpired("dnf", 300)):
             data = check_packages()
         assert "timed out" in data["error"]
 
     def test_dnf_error_exit(self):
-        with patch("subprocess.run", return_value=_completed(1, "", "permission denied")):
+        with patch("shutil.which", side_effect=self._which_dnf), \
+             patch("subprocess.run", return_value=_completed(1, "", "permission denied")):
             data = check_packages()
         assert data["error"] is not None
+
+    # ── zypper tests ──────────────────────────────────────────────────────
+
+    def test_zypper_no_updates(self):
+        zypper_out = (
+            "Loading repository data...\n"
+            "S  | Repository | Name | Current Version | Available Version | Arch\n"
+            "---+------------+------+-----------------+-------------------+-----\n"
+        )
+        with patch("shutil.which", side_effect=self._which_zypper), \
+             patch("subprocess.run", return_value=_completed(0, zypper_out)):
+            data = check_packages()
+        assert data["error"] is None
+        assert data["updates"] == []
+
+    def test_zypper_updates_available(self):
+        zypper_out = (
+            "S  | Repository | Name  | Current Version | Available Version | Arch\n"
+            "---+------------+-------+-----------------+-------------------+-------\n"
+            "v  | repo-oss   | bash  | 5.1.16-1.1      | 5.2.15-1.1        | x86_64\n"
+            "v  | repo-oss   | curl  | 8.5.0-1.1       | 8.6.0-1.1         | x86_64\n"
+        )
+        with patch("shutil.which", side_effect=self._which_zypper), \
+             patch("subprocess.run", return_value=_completed(0, zypper_out)):
+            data = check_packages()
+        assert data["error"] is None
+        assert len(data["updates"]) == 2
+
+    def test_zypper_not_found(self):
+        with patch("shutil.which", side_effect=self._which_zypper), \
+             patch("subprocess.run", side_effect=FileNotFoundError):
+            data = check_packages()
+        assert data["error"] is not None
+        assert "zypper not found" in data["error"]
+
+    def test_no_package_manager_found(self):
+        with patch("shutil.which", return_value=None):
+            data = check_packages()
+        assert "No supported package manager" in data["error"]
 
 
 # ---------------------------------------------------------------------------

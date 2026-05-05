@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh – install server-watchdog on RHEL 8
+# install.sh – install server-watchdog on RHEL 8+ / openSUSE
 # Run as root: sudo bash install.sh
 
 set -euo pipefail
@@ -8,6 +8,7 @@ INSTALL_PREFIX="${INSTALL_PREFIX:-/usr}"
 VENV_DIR="/opt/server-watchdog/venv"
 CONFIG_DIR="/etc/server-watchdog"
 LOG_DIR="/var/log/server-watchdog"
+STATE_DIR="/var/lib/server-watchdog"
 SYSTEMD_DIR="/etc/systemd/system"
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
@@ -18,6 +19,34 @@ error()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
 [[ $EUID -eq 0 ]] || error "This script must be run as root."
+
+# ── Detect distribution ───────────────────────────────────────────────────────
+DISTRO="unknown"
+if [[ -f /etc/os-release ]]; then
+    DISTRO=$(. /etc/os-release && echo "${ID:-unknown}")
+fi
+info "Detected distribution: ${DISTRO}"
+
+# Classify distro family
+case "$DISTRO" in
+    rhel|centos|fedora|rocky|alma)
+        DISTRO_FAMILY="rhel"
+        PKG_MANAGER="dnf"
+        ;;
+    opensuse*|sles)
+        DISTRO_FAMILY="suse"
+        PKG_MANAGER="zypper"
+        ;;
+    debian|ubuntu)
+        DISTRO_FAMILY="debian"
+        PKG_MANAGER="apt"
+        ;;
+    *)
+        DISTRO_FAMILY="unknown"
+        PKG_MANAGER="unknown"
+        warn "Unsupported distribution '${DISTRO}'. Proceeding anyway."
+        ;;
+esac
 
 # find_python – pick the newest Python in [3.10, 3.14] available on this host.
 # Tries versioned binaries from newest to oldest first, then falls back to the
@@ -66,6 +95,7 @@ ln -sf "$VENV_DIR/bin/server-watchdog-send-now"       "$INSTALL_PREFIX/bin/serve
 info "Creating directories..."
 install -d -m 755 "$CONFIG_DIR"
 install -d -m 755 "$LOG_DIR"
+install -d -m 755 "$STATE_DIR"
 
 # ── Install configuration file ────────────────────────────────────────────────
 if [[ -f "$CONFIG_DIR/config.ini" ]]; then
@@ -89,12 +119,22 @@ info "Enabling and starting services..."
 systemctl enable --now server-watchdog-avc.service
 systemctl enable --now server-watchdog-monthly.timer
 
+# ── Distro-specific notes ─────────────────────────────────────────────────────
 info "Installation complete!"
 echo
 echo "Next steps:"
 echo "  1. Edit ${CONFIG_DIR}/config.ini"
-echo "     - Set [email] smtp_host / to_addr"
+echo "     - Set [email] smtp_host / to_addr (or backend = msmtp for ~/.msmtprc)"
 echo "     - Set [llm] api_key to your Gemini API key"
 echo "  2. Check service status:"
 echo "     systemctl status server-watchdog-avc.service"
 echo "     systemctl list-timers server-watchdog-monthly.timer"
+
+if [[ "$DISTRO_FAMILY" == "suse" ]]; then
+    echo
+    echo "  openSUSE notes:"
+    echo "    - Package updates will be checked via zypper (auto-detected)."
+    echo "    - AppArmor denials are monitored alongside SELinux AVC denials."
+    echo "    - If AppArmor blocks the daemon, add a local profile exception:"
+    echo "      aa-complain /opt/server-watchdog/venv/bin/python3"
+fi

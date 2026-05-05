@@ -1,8 +1,9 @@
-"""Real-time SELinux AVC denial monitor daemon for server-watchdog.
+"""Real-time SELinux/AppArmor denial monitor daemon for server-watchdog.
 
 Architecture
 ------------
-- Follow the systemd journal for kernel messages containing "avc: denied".
+- Follow the systemd journal for messages containing ``avc: denied``
+  (SELinux) or ``apparmor="DENIED"`` (AppArmor).
 - Batch incoming denials for up to *batch_interval* seconds after the first
   one arrives, then:
     1. Call the configured LLM to produce a human-readable analysis.
@@ -21,7 +22,7 @@ from datetime import datetime
 
 from .email_sender import send_email
 from .llm import analyse_avc_denials
-from .utils import escape_html, get_hostname, markdown_to_html
+from .utils import detect_mac_system, escape_html, get_hostname, markdown_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class AVCMonitor:
     def __init__(self, config):
         self._config = config
         self._batch_interval = config.getint("avc_monitor", "batch_interval", fallback=60)
+        self._mac_system = detect_mac_system()
         self._running = False
         self._pending = []
         self._timer = None
@@ -57,7 +59,7 @@ class AVCMonitor:
         for message in self._follow_journal():
             if not self._running:
                 break
-            if "avc: denied" in message.lower():
+            if _is_mac_denial(message):
                 self._enqueue(message)
 
         logger.info("AVC monitor stopped.")
@@ -130,7 +132,9 @@ class AVCMonitor:
         logger.info("Flushing batch of %d AVC denial(s).", len(denials))
 
         try:
-            analysis = analyse_avc_denials(self._config, denials)
+            analysis = analyse_avc_denials(
+                self._config, denials, mac_system=self._mac_system
+            )
             self._send_alert(denials, analysis)
         except Exception as exc:  # pylint: disable=broad-except
             logger.error("Failed to process AVC batch: %s", exc)
@@ -204,7 +208,7 @@ def read_current_avc_denials(config):
             try:
                 entry = json.loads(raw_line.decode("utf-8", errors="replace"))
                 msg = entry.get("MESSAGE", "")
-                if "avc: denied" in msg.lower():
+                if _is_mac_denial(msg):
                     denials.append(msg)
             except (json.JSONDecodeError, AttributeError):
                 continue
@@ -218,6 +222,12 @@ def read_current_avc_denials(config):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+def _is_mac_denial(message):
+    """Return ``True`` if *message* is a SELinux AVC or AppArmor denial."""
+    lower = message.lower()
+    return "avc: denied" in lower or 'apparmor="denied"' in lower
+
 
 def main(config):
     """Start the AVC monitor.  Intended to be called from the entry-point script."""
